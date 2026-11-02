@@ -1,0 +1,117 @@
+"""Notes & highlights: CRUD, tags, export to Markdown / PDF."""
+from __future__ import annotations
+
+import re
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.books import get_book_or_404
+from app.db.models import Note
+from app.db.session import get_db
+from app.features import notes as export
+
+router = APIRouter(prefix="/api", tags=["notes"])
+
+Kind = Literal["note", "answer", "passage", "quote"]
+
+
+def _clean_tags(tags: list[str]) -> list[str]:
+    out = []
+    for t in tags:
+        t = re.sub(r"[^\w\- ]", "", t.strip().lstrip("#")).strip().lower()[:60]
+        if t and t not in out:
+            out.append(t)
+    return out[:20]
+
+
+def note_dict(n: Note) -> dict:
+    return {"id": n.id, "book_id": n.book_id, "kind": n.kind, "title": n.title, "content": n.content,
+            "chunk_id": n.chunk_id, "message_id": n.message_id, "location": n.location or {}, "tags": n.tags or [],
+            "created_at": n.created_at.isoformat() if n.created_at else None}
+
+
+class NoteCreate(BaseModel):
+    kind: Kind = "note"
+    title: str | None = Field(default=None, max_length=300)
+    content: str = Field(min_length=1, max_length=50_000)
+    chunk_id: int | None = None
+    message_id: int | None = None
+    location: dict = Field(default_factory=dict)  # chapter_id, chapter_title, page, char_start, char_end
+    tags: list[str] = Field(default_factory=list)
+
+
+class NoteUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=300)
+    content: str | None = Field(default=None, min_length=1, max_length=50_000)
+    tags: list[str] | None = None
+
+
+@router.post("/books/{book_id}/notes", status_code=201)
+async def create_note(book_id: int, req: NoteCreate, db: AsyncSession = Depends(get_db)):
+    await get_book_or_404(db, book_id)
+    note = Note(book_id=book_id, kind=req.kind, title=req.title, content=req.content, chunk_id=req.chunk_id,
+                message_id=req.message_id, location=req.location, tags=_clean_tags(req.tags))
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return note_dict(note)
+
+
+async def _notes(db: AsyncSession, book_id: int, tag: str | None) -> list[Note]:
+    stmt = select(Note).where(Note.book_id == book_id).order_by(Note.created_at.desc())
+    if tag:
+        stmt = stmt.where(Note.tags.any(tag.lower()))
+    return list((await db.execute(stmt)).scalars())
+
+
+@router.get("/books/{book_id}/notes")
+async def list_notes(book_id: int, tag: str | None = None, db: AsyncSession = Depends(get_db)):
+    await get_book_or_404(db, book_id)
+    notes = await _notes(db, book_id, tag)
+    all_tags = sorted({t for n in await _notes(db, book_id, None) for t in (n.tags or [])})
+    return {"notes": [note_dict(n) for n in notes], "tags": all_tags}
+
+
+@router.patch("/notes/{note_id}")
+async def update_note(note_id: int, req: NoteUpdate, db: AsyncSession = Depends(get_db)):
+    note = await db.get(Note, note_id)
+    if note is None:
+        raise HTTPException(404, "Note not found.")
+    if req.title is not None:
+        note.title = req.title or None
+    if req.content is not None:
+        note.content = req.content
+    if req.tags is not None:
+        note.tags = _clean_tags(req.tags)
+    await db.commit()
+    await db.refresh(note)
+    return note_dict(note)
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+async def delete_note(note_id: int, db: AsyncSession = Depends(get_db)):
+    note = await db.get(Note, note_id)
+    if note is None:
+        raise HTTPException(404, "Note not found.")
+    await db.delete(note)
+    await db.commit()
+
+
+@router.get("/books/{book_id}/notes/export")
+async def export_notes(book_id: int, format: Literal["md", "pdf"] = "md", tag: str | None = None,
+                       db: AsyncSession = Depends(get_db)):
+    book = await get_book_or_404(db, book_id)
+    notes = list(reversed(await _notes(db, book_id, tag)))  # oldest first reads naturally
+    if not notes:
+        raise HTTPException(404, "No notes to export.")
+    slug = re.sub(r"[^\w]+", "-", book.title.lower()).strip("-")[:60] or "notes"
+    if format == "md":
+        return Response(export.to_markdown(book, notes), media_type="text/markdown; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{slug}-notes.md"'})
+    return Response(export.to_pdf(book, notes), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}-notes.pdf"'})
