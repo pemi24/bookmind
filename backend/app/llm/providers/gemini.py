@@ -17,7 +17,7 @@ API = "https://generativelanguage.googleapis.com/v1beta"
 
 class GeminiProvider(LLMProvider):
     name = "gemini"
-    default_model = "gemini-2.5-flash"
+    default_model = "gemini-3.5-flash"
 
     def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> None:
         super().__init__(settings)
@@ -26,6 +26,11 @@ class GeminiProvider(LLMProvider):
             timeout=httpx.Timeout(settings.llm_timeout_seconds, connect=10.0),
             headers={"x-goog-api-key": settings.gemini_api_key},
         )
+
+    @property
+    def default_top_k(self) -> int:
+        # Large context and cheap input tokens: more passages lets answers recover from re-ranker misses.
+        return 12
 
     def configured(self) -> bool:
         return bool(self.settings.gemini_api_key)
@@ -52,7 +57,9 @@ class GeminiProvider(LLMProvider):
         if status in (401, 403):
             return LLMError(f"Gemini refused the request (permission): {msg}", 503)
         if status == 404:
-            return LLMError(f"Gemini model '{self.model}' not found. Check LLM_MODEL in backend/.env.", 503)
+            # Includes Google's reason, e.g. a model retired for new API keys.
+            return LLMError(f"Gemini model '{self.model}' is unavailable: {msg[:200]} "
+                            "Set LLM_MODEL in backend/.env to a current model.", 503)
         if status == 429:
             return LLMError("Gemini is rate-limiting requests (or the free quota is used up). Try again later.", 429)
         if status >= 500:

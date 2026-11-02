@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # --- LLM provider (see app/llm/providers/) ---
     llm_provider: str = "ollama"  # ollama (local, default) | gemini | anthropic
-    # Empty = the provider's default model (ollama: qwen2.5:3b, gemini: gemini-2.5-flash,
+    # Empty = the provider's default model (ollama: qwen2.5:3b, gemini: gemini-3.5-flash,
     # anthropic: claude-opus-5-5).
     llm_model: str = ""
     # Model for bulk/background jobs (entity extraction, timeline, quizzes). Empty = LLM_MODEL.

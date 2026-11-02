@@ -279,6 +279,7 @@ the running backend (start it first); the test book is deleted afterwards.
 | "The AI model kept returning malformed data" (quizzes, explorer) | Small models occasionally fail structured output even after retries. Try again, raise `LLM_JSON_RETRIES`, or use a bigger model. |
 | Answers have no `[1]` citation chips | Small models sometimes forget to cite; the passages used are still shown under the answer. A larger model cites more reliably. |
 | "GEMINI_API_KEY is not set" / "ANTHROPIC_API_KEY is not set" | Only when `LLM_PROVIDER` is `gemini`/`anthropic`: add the key to `backend/.env` and restart the backend — or switch back to `LLM_PROVIDER=ollama`. |
+| "Gemini model '…' is unavailable" | Google retires older models (often for new API keys first). Set `LLM_MODEL` in `backend/.env` to a current one from https://ai.google.dev/gemini-api/docs/models and restart the backend. |
 | "rate-limiting" / "overloaded" messages | Cloud providers only; temporary — wait and retry. |
 | Scanned PDF warning | Install Tesseract (Windows: https://github.com/UB-Mannheim/tesseract/wiki, macOS: `brew install tesseract`, Linux: `apt install tesseract-ocr`) and click Re-index. |
 | First start is slow | The embedding and re-ranking models (~150 MB) download once into the Hugging Face cache. |

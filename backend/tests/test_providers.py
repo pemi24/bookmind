@@ -228,11 +228,22 @@ async def test_gemini_bad_key_and_missing_key():
     assert not (await unconfigured.check()).ok
 
 
+async def test_gemini_retired_model_reports_googles_reason():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"message": "This model is no longer available to new users."}})
+
+    p = GeminiProvider(settings(llm_provider="gemini", gemini_api_key="k"), transport=httpx.MockTransport(handler))
+    with pytest.raises(LLMError) as e:
+        async for _ in p.stream_chat("sys", [{"role": "user", "content": "hi"}]):
+            pass
+    assert "no longer available" in e.value.message and "LLM_MODEL" in e.value.message
+
+
 # ------------------------------------------------------------------ registry / Anthropic
 
 def test_create_provider_by_name_and_defaults():
     assert create_provider("ollama", settings()).model == "qwen2.5:3b"
-    assert create_provider("Gemini", settings()).model == "gemini-2.5-flash"
+    assert create_provider("Gemini", settings()).model == "gemini-3.5-flash"
     a = create_provider("anthropic", settings(llm_model="claude-sonnet-5-5"))
     assert a.model == "claude-sonnet-5-5" and not a.configured() and "ANTHROPIC_API_KEY" in a.not_configured_message()
     assert create_provider("ollama", settings(llm_model="llama3.1:8b", llm_fast_model="qwen2.5:3b")).fast_model == "qwen2.5:3b"
