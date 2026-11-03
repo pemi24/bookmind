@@ -17,6 +17,7 @@ import type {
   KindleBook,
   KindleResult,
   Length,
+  MemoryStatus,
   Mention,
   NetworkInfo,
   NewNote,
@@ -166,6 +167,8 @@ export const api = {
     request<TranslationState>(`/api/chapters/${chapterId}/translation`, json("POST", { language })),
 
   network: () => request<NetworkInfo>("/api/network"),
+  memory: (bookId: number) => request<MemoryStatus>(`/api/books/${bookId}/memory`),
+  buildMemory: (bookId: number) => request<MemoryStatus>(`/api/books/${bookId}/memory`, { method: "POST" }),
 
   // Reading stats
   stats: () => request<Stats>("/api/stats"),

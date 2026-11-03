@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chapter, Chunk, Entity, EntityRelation, TimelineEvent
 from app.db.session import get_db
-from app.features import analysis, essay, quotes, summaries, translate
+from app.features import analysis, essay, memory, quotes, summaries, translate
 from app.features.common import get_chapter, ready_book
 from app.features.jobs import is_running, job_dict, latest_job, start_job
 from app.llm.client import llm_configured, not_configured_message
@@ -268,6 +268,24 @@ async def start_translation(chapter_id: int, req: TranslateRequest, db: AsyncSes
     job = await start_job(chapter.book_id, translate.job_kind(chapter.id, language),
                           translate.translation_job(chapter.book_id, chapter.id, language))
     return {"status": "running", "language": language, "job": job}
+
+
+# ---------------------------------------------------------------- book memory
+
+@router.get("/books/{book_id}/memory")
+async def memory_status(book_id: int, db: AsyncSession = Depends(get_db)):
+    """How many chapters have a memory summary, and the job writing them (if any)."""
+    await ready_book(db, book_id)
+    return {**await memory.status(db, book_id), "job": job_dict(await latest_job(db, book_id, memory.JOB_KIND))}
+
+
+@router.post("/books/{book_id}/memory", status_code=202)
+async def build_memory(book_id: int, db: AsyncSession = Depends(get_db)):
+    """Write the missing chapter summaries (books added before book memory existed, or after a failure)."""
+    await ready_book(db, book_id)
+    require_llm()
+    job = await start_job(book_id, memory.JOB_KIND, memory.memory_job(book_id))
+    return {**await memory.status(db, book_id), "job": job}
 
 
 @router.get("/books/{book_id}/jobs/{kind}")

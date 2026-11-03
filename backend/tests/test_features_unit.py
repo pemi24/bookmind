@@ -302,6 +302,30 @@ def test_refusal_detection():
 def test_book_overview_prompt():
     from app.llm.prompts.chat import build_overview, build_system
 
-    ov = build_overview("Alice", "Lewis Carroll", [f"Chapter {i}" for i in range(1, 400)], "A girl falls.", max_chars=200)
-    assert '"Alice" by Lewis Carroll' in ov and "Summary: A girl falls." in ov and ov.rstrip().endswith("…")
-    assert ov in build_system(overview=ov)
+    chapters = [("Down the Rabbit-Hole", "Alice follows a White Rabbit. She falls down a deep hole."),
+                ("The Pool of Tears", None)]
+    ov = build_overview("Alice", "Lewis Carroll", chapters, "A girl falls into Wonderland.")
+    assert '"Alice" by Lewis Carroll' in ov and "Book summary: A girl falls into Wonderland." in ov
+    assert "1. Down the Rabbit-Hole: Alice follows a White Rabbit. She falls down a deep hole." in ov
+    assert "2. The Pool of Tears" in ov and ov in build_system(overview=ov)
+    # Too long for the budget: first sentences only, then titles only.
+    many = [(f"Chapter {i}", "First sentence here. " + "More detail. " * 40) for i in range(1, 60)]
+    short = build_overview("Big", None, many, max_chars=3000)
+    assert "1. Chapter 1: First sentence here." in short and "More detail" not in short
+    tiny = build_overview("Big", None, many, max_chars=600)
+    assert "1. Chapter 1\n" in tiny and "First sentence" not in tiny
+
+
+def test_pdf_outline_depth():
+    from app.ingestion.parsers.pdf import outline_chapters
+
+    bible = (
+        [[1, "Cover", 1], [1, "Old Testament", 3], [2, "Genesis", 4]]
+        + [[3, f"Genesis {i}", 4 + i] for i in range(1, 51)] + [[2, "Exodus", 60]]
+        + [[3, f"Exodus {i}", 60 + i] for i in range(1, 41)] + [[1, "New Testament", 200], [2, "Matthew", 201]]
+        + [[3, f"Matthew {i}", 201 + i] for i in range(1, 129)]
+    )
+    # Level 3 would give 220 chapters: too many, so the books (level 2) are used, with "Cover" kept.
+    assert [t for t, _ in outline_chapters(bible)] == ["Cover", "Genesis", "Exodus", "Matthew"]
+    assert outline_chapters([[1, "Book", 1], [2, "Ch 1", 2], [2, "Ch 2", 5]]) == [("Ch 1", 2), ("Ch 2", 5)]
+    assert outline_chapters([[1, "A", 1], [1, "B", 3]]) == [("A", 1), ("B", 3)] and outline_chapters([]) == []

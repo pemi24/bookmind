@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, watchProgress } from "./api";
+import BookMemory from "./components/BookMemory";
 import ChatPanel from "./components/ChatPanel";
 import Discover from "./components/Discover";
 import Library from "./components/Library";
@@ -455,6 +456,7 @@ export default function App() {
                 </p>
               </div>
               {bookReady && chapters.length > 0 && <SpoilerControl chapters={chapters} value={spoiler} furthest={furthestRead} onChange={setSpoiler} />}
+              {bookReady && <BookMemory bookId={book.id} notify={notify} />}
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   onClick={() => (reader.open ? closeReader() : setReader((r) => ({ ...r, open: true })))}

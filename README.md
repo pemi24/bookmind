@@ -6,8 +6,9 @@ a reader with the passage highlighted.
 
 * **Backend**: Python 3.11+, FastAPI, SQLAlchemy 2 (async) + Alembic, psycopg 3
 * **Database**: PostgreSQL 16+ with **pgvector** — installed natively, no Docker
-* **AI**: any of **Ollama** (local, free, fully offline — the default), **Google Gemini** or
-  **Anthropic Claude**, selected in `.env`; local `sentence-transformers` for embeddings and
+* **AI**: any of **Ollama** (local, free, fully offline — the default), **Google Gemini**, **Groq**,
+  **OpenRouter** or **Anthropic Claude**, selected in `.env`, with optional **backup providers** used
+  automatically when one's free quota runs out; local `sentence-transformers` for embeddings and
   re-ranking (free, offline after the first download). **No API key is required.**
 * **Frontend**: React + Vite + Tailwind, light/dark mode
 
@@ -67,7 +68,7 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 About 2 GB of disk for Python packages (PyTorch, CPU-only), ~150 MB for the embedding models
 (downloaded once on first start) and 2–5 GB for an Ollama model.
-A Gemini or Anthropic API key is optional, only if you prefer a cloud model (§3).
+A cloud API key (Gemini, Groq, OpenRouter or Anthropic) is optional, only if you prefer a cloud model (§4).
 
 ---
 
@@ -219,6 +220,25 @@ All other settings (context size, chunk sizes, retrieval depth, upload limit) ar
 Everything runs offline once the embedding models (first start) and the Ollama model are
 downloaded.
 
+### Backup AI providers (free)
+
+Free cloud plans have daily limits (Gemini's free `gemini-3.5-flash`: 20 requests a day). List
+backups and BookMind moves to the next one when a quota runs out, a service is overloaded or an
+answer is refused — before any text is shown, so answers are never mixed. A used-up daily quota
+is skipped until it resets; a "try again in a few seconds" limit is simply waited out.
+
+```ini
+LLM_PROVIDER=gemini
+LLM_FALLBACKS=groq,openrouter
+GROQ_API_KEY=...         # https://console.groq.com/keys  — ~1,000 requests/day, answers in 1-2 s
+OPENROUTER_API_KEY=...   # https://openrouter.ai/keys     — free models only (":free"), 50 requests/day
+```
+
+Groq's free plan also limits tokens per minute, so BookMind sends it shorter requests (fewer
+passages, a shorter book memory). OpenRouter never charges a key whose account has no credits,
+and BookMind refuses non-free OpenRouter models. Each provider receives your questions and the book
+passages sent with them; check their privacy terms for private books.
+
 ---
 
 ## 5. Run
@@ -317,7 +337,7 @@ the running backend (start it first); the test book is deleted afterwards.
 | Answers have no `[1]` citation chips | Small models sometimes forget to cite; the passages used are still shown under the answer. A larger model cites more reliably. |
 | "GEMINI_API_KEY is not set" / "ANTHROPIC_API_KEY is not set" | Only when `LLM_PROVIDER` is `gemini`/`anthropic`: add the key to `backend/.env` and restart the backend — or switch back to `LLM_PROVIDER=ollama`. |
 | "Gemini model '…' is unavailable" | Google retires older models (often for new API keys first). Set `LLM_MODEL` in `backend/.env` to a current one from https://ai.google.dev/gemini-api/docs/models and restart the backend. |
-| "rate-limiting" / "overloaded" messages | Cloud providers only; temporary — wait and retry. Gemini requests are retried automatically and then switch to `GEMINI_FALLBACK_MODEL` (default `gemini-flash-lite-latest`). |
+| "rate-limiting" / "overloaded" / "free daily quota is used up" | Cloud providers only. Add backups (`LLM_FALLBACKS=groq,openrouter`, §4) and BookMind switches automatically; without backups, Gemini falls back to `GEMINI_FALLBACK_MODEL`. Free daily quotas reset once a day. |
 | "Google's content filter stopped this answer" | Gemini's filter occasionally blocks harmless book passages, more often with the lighter fallback model. Rephrase, retry later (when the main model isn't overloaded), or use Ollama / Anthropic. |
 | Phone can't open the LAN address | Same Wi-Fi network (not guest Wi-Fi or mobile data)? Allow Python through the firewall for private networks (Windows Security → Firewall → Allow an app). Try the other addresses `start.bat lan` prints. If `backend/.env` sets `HOST`, remove that line. |
 | "Find free books" says a library is busy or slow | That site is temporarily overloaded; the other sources still answer. Try again in a minute (results are cached for an hour). |

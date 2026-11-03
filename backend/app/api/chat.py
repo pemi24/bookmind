@@ -15,7 +15,7 @@ from app.api.books import get_book_or_404
 from app.config import get_settings
 from app.db.models import Book, Chapter, Citation, Conversation, Message
 from app.db.session import SessionLocal, get_db
-from app.features import summaries
+from app.features import memory, summaries
 from app.llm import client as llm
 from app.llm.prompts import chat as chat_prompts
 from app.llm.prompts import query as query_prompts
@@ -114,20 +114,19 @@ async def _rewrite_query(history: list[dict], question: str) -> str:
         return question
 
 
-async def _overview(db: AsyncSession, book: Book, max_chapter: int | None) -> str:
-    """Title, author, chapters (within the spoiler limit) and a saved whole-book summary, if one exists."""
-    stmt = select(Chapter.title).where(Chapter.book_id == book.id).order_by(Chapter.position)
-    if max_chapter is not None:
-        stmt = stmt.where(Chapter.position <= max_chapter)
-    titles = list((await db.execute(stmt)).scalars())
+async def _overview(db: AsyncSession, book: Book, max_chapter: int | None) -> tuple[str, bool]:
+    """Book memory: each chapter's summary (within the spoiler limit) and a saved whole-book summary, if any.
+    Also says whether any chapter summary exists yet (books whose memory isn't built only list chapter titles)."""
+    chapters = await memory.chapter_memories(db, book.id, max_chapter)
     summary = None
     for length in ("short", "medium", "detailed"):
         if hit := await summaries.cached(db, book.id, None, length, max_chapter):
             summary = hit.content
             break
     # Small local models have little context to spare.
-    return chat_prompts.build_overview(book.title, book.author, titles, summary,
-                                       max_chars=800 if llm.provider().local else 2500)
+    text = chat_prompts.build_overview(book.title, book.author, chapters, summary,
+                                       max_chars=1500 if llm.provider().local else 14000)
+    return text, bool(summary) or any(m for _, m in chapters)
 
 
 async def _search_again(book_id: int, book_title: str, question: str, max_chapter: int | None,
@@ -200,7 +199,7 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
 
     history = await _history(db, conv.id)
     book_title = book.title
-    overview = None if compare_ids else await _overview(db, book, req.spoiler_chapter)
+    overview, has_memory = (None, False) if compare_ids else await _overview(db, book, req.spoiler_chapter)
     meta = {"style": req.style, "spoiler_chapter": req.spoiler_chapter, "persona": req.persona,
             "compare_book_ids": compare_ids}
     user_msg = Message(conversation_id=conv.id, role="user", content=req.message, meta=meta)
@@ -225,7 +224,7 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
 
             yield sse("status", {"stage": "answering"})
             system = chat_prompts.build_system(req.style, spoiler, bool(compare_ids), req.persona, overview)
-            messages = [*history, {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages)}]
+            messages = [*history, {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages, memory=has_memory)}]
             async for delta in llm.stream_text(system, messages):
                 answer += delta
                 yield sse("delta", {"text": delta})
@@ -241,7 +240,7 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
                     yield sse("reset", {})
                     yield sse("sources", {"query": query, "sources": sources})
                     yield sse("status", {"stage": "answering"})
-                    messages[-1] = {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages)}
+                    messages[-1] = {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages, memory=has_memory)}
                     answer = ""
                     async for delta in llm.stream_text(system, messages):
                         answer += delta

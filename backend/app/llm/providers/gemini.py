@@ -86,7 +86,11 @@ class GeminiProvider(LLMProvider):
             return LLMError(f"Gemini model '{self.model}' is unavailable: {msg[:200]} "
                             "Set LLM_MODEL in backend/.env to a current model.", 503)
         if status == 429:
-            return LLMError("Gemini is rate-limiting requests (or the free quota is used up). Try again later.", 429)
+            if reset := _daily_quota_reset(body):
+                return LLMError(f"Gemini's free daily quota for {self.model} is used up (it resets in about "
+                                f"{reset / 3600:.0f} h).", 429, retry_after=reset)
+            return LLMError("Gemini is rate-limiting requests (or the free quota is used up). Try again later.", 429,
+                            retry_after=60)
         if status >= 500:
             return LLMError("Gemini is temporarily unavailable. Please try again shortly.", 503)
         return LLMError(f"Gemini error ({status}): {msg}", 502)
@@ -134,6 +138,9 @@ class GeminiProvider(LLMProvider):
     def _models(self, model: str) -> list[str]:
         """The requested model, then the fallback; a model whose daily quota is used up is skipped."""
         fallback = self.settings.gemini_fallback_model.strip()
+        # With a provider chain (LLM_FALLBACKS), the next provider takes over instead.
+        if self.settings.llm_fallbacks.strip():
+            fallback = ""
         models = [model, fallback] if fallback and fallback != model else [model]
         now = time.monotonic()
         usable = [m for m in models if _exhausted.get(m, 0.0) <= now]

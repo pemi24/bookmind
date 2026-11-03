@@ -31,20 +31,21 @@ async def cached(db: AsyncSession, book_id: int, chapter_id: int | None, length:
     return (await db.execute(stmt.order_by(Summary.id.desc()).limit(1))).scalars().first()
 
 
-async def _summarize_text(book_title: str, chapter_title: str, text: str, length: str) -> str:
+async def _summarize_text(book_title: str, chapter_title: str, text: str, length: str,
+                          model: str | None = None) -> str:
     s = get_settings()
     parts = split_text(text)
     if len(parts) == 1:
         return await llm.complete_text(P.SYSTEM, P.chapter_user(book_title, chapter_title, text, length),
-                                       effort=s.llm_task_effort)
+                                       model=model, effort=s.llm_task_effort)
     partials = [
         await llm.complete_text(P.SYSTEM, P.part_user(book_title, chapter_title, p, i, len(parts)),
-                                model=s.llm_fast_model, effort=s.llm_task_effort)
+                                model=model or s.llm_fast_model, effort=s.llm_task_effort)
         for i, p in enumerate(parts, 1)
     ]
     pieces = [(f"Part {i}", t) for i, t in enumerate(partials, 1)]
     return await llm.complete_text(P.SYSTEM, P.combine_user(book_title, f"chapter '{chapter_title}'", pieces,
-                                                            length, False), effort=s.llm_task_effort)
+                                                            length, False), model=model, effort=s.llm_task_effort)
 
 
 async def chapter_summary(db: AsyncSession, book: Book, chapter: Chapter, length: str, refresh: bool) -> Summary:

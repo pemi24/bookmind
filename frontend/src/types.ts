@@ -319,6 +319,13 @@ export interface Stats {
   flashcards: { total: number; due: number; mastered: number; reviews: number };
 }
 
+/** Book memory: how many chapters have a summary the AI reads with each question. */
+export interface MemoryStatus {
+  chapters: number;
+  done: number;
+  job: Job | null;
+}
+
 /** How to open BookMind from a phone or another device on the same network. */
 export interface NetworkInfo {
   /** The server listens on the network (started with start.bat lan / start.sh --lan). */

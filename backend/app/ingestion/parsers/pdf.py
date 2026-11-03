@@ -94,12 +94,39 @@ def parse_pdf(path: Path, progress: ProgressFn) -> ParsedDocument:
 
     # Chapters from the PDF outline (bookmarks), when present.
     toc = doc.get_toc(simple=True)  # [[level, title, page(1-based)], ...]
-    if toc:
-        top = min(level for level, _, _ in toc)
-        entries = [(t, p) for level, t, p in toc if level == top and p >= 1]
-        if len(entries) <= 2:  # a single "Book" root: use the next level instead
-            entries = [(t, p) for level, t, p in toc if level == top + 1 and p >= 1] or entries
-        for title, pno in entries:
-            out.headings.append(Heading(page_index=min(pno, n) - 1, para_index=0, title=title.strip()))
+    for title, pno in outline_chapters(toc):
+        out.headings.append(Heading(page_index=min(pno, n) - 1, para_index=0, title=title.strip()))
     doc.close()
     return out
+
+
+MAX_OUTLINE_CHAPTERS = 200
+
+
+def outline_chapters(toc: list[list]) -> list[tuple[str, int]]:
+    """Chapters from a PDF outline: the deepest level that still gives at most ~200 chapters.
+
+    Outlines are often nested (Bible: "Old Testament" > "Genesis" > "Genesis 1"). Only the top level
+    made the whole Old Testament one chapter; every level made 1,300 tiny ones. At the chosen depth,
+    an entry is used if it is at that depth, or above it with nothing deeper inside (e.g. "Preface").
+    """
+    items = [(level, title, page) for level, title, page in toc if page >= 1 and str(title).strip()]
+    if not items:
+        return []
+
+    def frontier(depth: int) -> list[tuple[str, int]]:
+        out = []
+        for i, (level, title, page) in enumerate(items):
+            has_child = i + 1 < len(items) and items[i + 1][0] > level
+            if level == depth or (level < depth and not has_child):
+                out.append((title, page))
+        return out
+
+    top, deepest = min(lv for lv, _, _ in items), max(lv for lv, _, _ in items)
+    best = frontier(top)
+    for depth in range(top + 1, deepest + 1):
+        entries = frontier(depth)
+        if len(entries) > MAX_OUTLINE_CHAPTERS:
+            break
+        best = entries
+    return best

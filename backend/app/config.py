@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     # Used when the main model stays overloaded ("high demand") after retries; empty = no fallback.
     gemini_fallback_model: str = "gemini-flash-lite-latest"
+    # Groq / OpenRouter (OpenAI-style APIs with free plans); used directly or as backups.
+    groq_api_key: str = ""
+    groq_model: str = ""  # empty = openai/gpt-oss-120b
+    openrouter_api_key: str = ""
+    openrouter_model: str = ""  # empty = a free NVIDIA Nemotron model (only ":free" models are allowed)
+    # Backup providers, tried in order when the main one is used up, overloaded or refuses,
+    # e.g. "groq,openrouter". Empty = no backups.
+    llm_fallbacks: str = ""
 
     # Anthropic (optional)
     anthropic_api_key: str = ""

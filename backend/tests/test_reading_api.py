@@ -203,3 +203,39 @@ async def test_chat_searches_again_before_saying_not_found(test_db, fake_llm, mo
             assert saved[-1]["content"] == "The diaries tell of smugglers [1]."  # the replaced answer is what's kept
         finally:
             await c.delete(f"/api/books/{book_id}")
+
+
+async def test_book_memory_is_built_and_used_in_chat(test_db, fake_llm, monkeypatch):  # noqa: F811
+    import asyncio
+
+    from app.llm import client
+    from app.main import app
+
+    systems = []
+
+    async def stream_text(system, messages, **kw):
+        systems.append(system)
+        yield "Mara keeps the lighthouse [1]."
+
+    monkeypatch.setattr(client, "stream_text", stream_text)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+        r = await c.post("/api/books", files={"file": ("mem.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
+        book_id = r.json()["id"]
+        try:
+            assert (await _wait_ready(c, book_id))["status"] == "ready"
+            for _ in range(240):  # the memory job starts on its own after indexing
+                st = (await c.get(f"/api/books/{book_id}/memory")).json()
+                if st["chapters"] and st["done"] == st["chapters"]:
+                    break
+                await asyncio.sleep(0.25)
+            assert st["done"] == st["chapters"] == 3, st
+            again = (await c.post(f"/api/books/{book_id}/memory")).json()
+            assert again["done"] == 3  # nothing left to write
+
+            await c.post(f"/api/books/{book_id}/chat", json={"message": "Who keeps the lighthouse?"})
+            assert "Chapter by chapter:" in systems[-1] and "SUMMARY" in systems[-1]  # the fake model's summaries
+            await c.post(f"/api/books/{book_id}/chat", json={"message": "Who keeps the lighthouse?", "spoiler_chapter": 1})
+            lines = [ln for ln in systems[-1].splitlines() if ln[:3] in ("1. ", "2. ", "3. ")]
+            assert len(lines) == 1  # spoiler guard: only chapter 1's memory
+        finally:
+            await c.delete(f"/api/books/{book_id}")

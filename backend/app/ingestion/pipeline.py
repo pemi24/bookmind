@@ -141,6 +141,7 @@ async def ingest_book(book_id: int) -> None:
 
     # Non-critical enrichment (needs the LLM); failures only add a warning.
     await _profile_book(book_id)
+    await _start_memory(book_id)
 
 
 async def _run(book_id: int, prog: _Progress):
@@ -256,6 +257,7 @@ async def _profile_book(book_id: int) -> None:
             book_prompts.SYSTEM,
             book_prompts.build_user(title, author, list(chapters), list(samples)),
             book_prompts.BookProfile,
+            model=llm.provider().fast_model,
             max_tokens=4000,
         )
         values = {"is_fiction": profile.is_fiction, "suggested_questions": profile.questions[:8]}
@@ -269,3 +271,13 @@ async def _profile_book(book_id: int) -> None:
     async with SessionLocal() as db:
         await db.execute(update(Book).where(Book.id == book_id).values(**values))
         await db.commit()
+
+
+async def _start_memory(book_id: int) -> None:
+    """Write the book memory (chapter summaries for chat) in the background. Best effort."""
+    if not llm.llm_configured():
+        return
+    from app.features import memory  # local import: features build on ingestion, not the other way round
+    from app.features.jobs import start_job
+
+    await start_job(book_id, memory.JOB_KIND, memory.memory_job(book_id))

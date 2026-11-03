@@ -37,9 +37,12 @@ INSTRUCTION = ("Answer the question using the passages above, in 2-4 sentences. 
                f"Only if none of the passages is relevant to the question, answer: \"{NOT_FOUND}\"")
 
 OVERVIEW_RULE = """
-About the book (for questions about the book as a whole, such as what it is about or who the main \
-characters are; combine this with the passages): "{title}"{author}.
-{summary}Chapters: {chapters}"""
+Book memory: "{title}"{author}. Use it to understand the whole story (who, what, in which order, \
+why), for questions about the book as a whole and for context the passages leave out. Cite the \
+numbered passages for details and quotes; when something comes only from this memory, say which \
+chapter it is from instead of a [n].
+{summary}Chapter by chapter:
+{chapters}"""
 
 SPOILER_RULE = """
 Spoiler guard: the reader has only read up to chapter {n} ("{title}"). The passages are limited to \
@@ -58,15 +61,32 @@ passages don't say), answer in character that you don't know. Never break charac
 say something isn't in the book."""
 
 
-def build_overview(title: str, author: str | None, chapter_titles: Sequence[str], summary: str | None = None,
-                   max_chars: int = 2500) -> str:
-    """Title, author, chapter list (and a saved book summary, if any) for whole-book questions."""
-    chapters = "; ".join(f"{i}. {t}" for i, t in enumerate(chapter_titles, start=1))
-    if len(chapters) > max_chars:
-        chapters = chapters[:max_chars].rsplit(";", 1)[0] + "; …"
-    summary_line = f"Summary: {summary.strip()[:1500]}\n" if summary else ""
+def _first_sentence(text: str, limit: int = 220) -> str:
+    s = re.split(r"(?<=[.!?])\s", " ".join(text.split()), maxsplit=1)[0]
+    return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _chapter_lines(chapters: Sequence[tuple[str, str | None]], max_chars: int) -> str:
+    """Full chapter memories if they fit; else first sentences; else titles only (cut off at the end)."""
+    for shorten in (lambda m: " ".join(m.split()), _first_sentence, None):
+        lines = [f"{i}. {t}" + (f": {shorten(m)}" if shorten and m else "")
+                 for i, (t, m) in enumerate(chapters, start=1)]
+        text = "\n".join(lines)
+        if len(text) <= max_chars or shorten is None:
+            break
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit("\n", 1)[0] + "\n…"
+    return text or "(none)"
+
+
+def build_overview(title: str, author: str | None, chapters: Sequence[tuple[str, str | None]],
+                   summary: str | None = None, max_chars: int = 14000) -> str:
+    """Book memory for the prompt: title, author, a saved whole-book summary (if any) and each chapter
+    with its memory summary (chapters still without one are listed by title)."""
+    summary_line = f"Book summary: {_first_sentence(summary, 1500) if len(summary) > 1500 else summary.strip()}\n" \
+        if summary else ""
     return OVERVIEW_RULE.format(title=title, author=f" by {author}" if author else "", summary=summary_line,
-                                chapters=chapters or "(none)")
+                                chapters=_chapter_lines(chapters, max(max_chars - len(summary_line), 300)))
 
 
 def build_system(
@@ -103,15 +123,26 @@ def format_passages(passages: Sequence[Passage]) -> str:
     return "PASSAGES FROM THE BOOK:\n\n" + "\n\n".join(blocks)
 
 
-def build_user_turn(question: str, passages: Sequence[Passage]) -> str:
-    if not passages:
+MEMORY_INSTRUCTION = ("Answer the question using the passages above together with the book memory (the "
+                      "chapter-by-chapter summaries in your instructions), in 2-5 sentences. For questions about the "
+                      "whole book or how things develop, build the answer from the book memory and back it with "
+                      "passages where they fit. Put the passage number in brackets after sentences that use a "
+                      "passage, for example: \"Alice follows the White Rabbit down a rabbit-hole [2].\" "
+                      f"Only if neither the passages nor the book memory are relevant, answer: \"{NOT_FOUND}\"")
+
+
+def build_user_turn(question: str, passages: Sequence[Passage], memory: bool = False) -> str:
+    """The question with its passages. `memory`: the system prompt carries a book memory, so say to use it
+    too (otherwise small and "lite" models answer from the passages alone and miss the bigger picture)."""
+    if not passages and not memory:
         return f"(No passages were found.)\n\nQuestion: {question}\n\nReply exactly: \"{NOT_FOUND}\""
-    return f"{format_passages(passages)}\n\nQuestion: {question}\n\n{INSTRUCTION}\n\nAnswer:"
+    body = format_passages(passages) if passages else "(No passages were found.)"
+    return f"{body}\n\nQuestion: {question}\n\n{MEMORY_INSTRUCTION if memory else INSTRUCTION}\n\nAnswer:"
 
 
 _NOT_FOUND = re.compile(
     r"(?:does|do|did)(?:n't| not) (?:say|state|mention|tell|specify|name|reveal|contain|include|provide|give"
-    r"|show|indicate|identify|explain)"
+    r"|show|indicate|identify|explain|describe|discuss|cover|detail)"
     r"|(?:could|can)(?:n't| ?not) find|not (?:mentioned|stated|specified|named|given|provided|found)"
     r"|no (?:information|mention|passage)|nothing (?:about|on|in the)|isn't (?:mentioned|stated|given)"
 )
@@ -136,3 +167,52 @@ def admits_gap(answer: str) -> bool:
     do not show who ..."): worth searching again before settling for it."""
     a = re.sub(r"\[[\d,\s–-]+\]", "", answer).lower().replace("’", "'")
     return is_not_found(answer) or (len(a) < 500 and bool(_NOT_FOUND.search(a)))
+
+
+def _total(system: str, messages: Sequence[dict]) -> int:
+    return len(system) + sum(len(m["content"]) for m in messages)
+
+
+def fit_chat(system: str, messages: list[dict], max_chars: int) -> tuple[str, list[dict]]:
+    """Shrink a chat request to fit a provider with a small request limit (e.g. Groq's free plan).
+
+    In order, until it fits: shorten the book memory to first sentences, then to chapter titles;
+    drop the oldest conversation turns; drop the last (lowest-ranked) passages, keeping at least 3.
+    Raises ValueError if it still doesn't fit (e.g. a long chapter sent for summarizing).
+    """
+    messages = [dict(m) for m in messages]
+    if _total(system, messages) <= max_chars:
+        return system, messages
+
+    head, sep, chapters = system.partition("Chapter by chapter:\n")
+    if sep:
+        lines = chapters.split("\n")
+        for shorten in (lambda line: _shorten_memory_line(line, sentence=True),
+                        lambda line: _shorten_memory_line(line, sentence=False)):
+            system = head + sep + "\n".join(shorten(ln) for ln in lines)
+            if _total(system, messages) <= max_chars:
+                return system, messages
+
+    while len(messages) > 1 and _total(system, messages) > max_chars:
+        messages.pop(0)  # oldest turn first; the question itself is last
+
+    last = messages[-1]["content"]
+    blocks = re.split(r"\n\n(?=\[\d+\] \()", last)
+    if blocks[0].startswith("PASSAGES FROM THE BOOK:") and len(blocks) > 1:
+        passages, tail = blocks[:-1], blocks[-1]
+        # The last block holds the last passage followed by the question: split it back apart.
+        last_passage, _, question = tail.partition("\n\nQuestion: ")
+        passages.append(last_passage)
+        while len(passages) > 4 and _total(system, messages[:-1]) + len("\n\n".join(passages)) + len(question) + 20 > max_chars:
+            passages.pop()
+        messages[-1] = {**messages[-1], "content": "\n\n".join(passages) + "\n\nQuestion: " + question}
+    if _total(system, messages) > max_chars:
+        raise ValueError("request too large for this provider")
+    return system, messages
+
+
+def _shorten_memory_line(line: str, sentence: bool) -> str:
+    m = re.match(r"^(\d+\. .*?): (.+)$", line)
+    if not m:
+        return line
+    return f"{m.group(1)}: {_first_sentence(m.group(2), 160)}" if sentence else m.group(1)
