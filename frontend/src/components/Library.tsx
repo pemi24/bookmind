@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpenText, FileUp, Loader2, MessageSquare, MoreVertical, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpenText, FileUp, Loader2, MessageSquare, MoreVertical, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Book } from "../types";
 import { coverGradient, formatBytes, formatDate, isIndexing } from "../utils";
@@ -31,12 +31,14 @@ function BookCard({
   onRead,
   onReindex,
   onDelete,
+  onResetReading,
 }: {
   book: Book;
   onOpen: () => void;
   onRead: () => void;
   onReindex: () => void;
   onDelete: () => void;
+  onResetReading: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -82,6 +84,11 @@ function BookCard({
               <button disabled={book.status !== "ready"} onClick={() => { setMenu(false); onRead(); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800">
                 <BookOpenText size={14} /> Read
               </button>
+              {book.reading && (
+                <button onClick={() => { setMenu(false); onResetReading(); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-stone-100 dark:hover:bg-stone-800">
+                  <RotateCcw size={14} /> Start over
+                </button>
+              )}
               <button disabled={busy} onClick={() => { setMenu(false); onReindex(); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800">
                 <RefreshCw size={14} /> Re-index
               </button>
@@ -107,11 +114,21 @@ function BookCard({
             </p>
           </>
         )}
-        {book.status === "ready" && (
+        {book.status === "ready" && book.reading && book.chapter_count ? (
+          <>
+            <div className="h-1.5 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-700" title="Furthest chapter read">
+              <div className="h-full bg-emerald-500" style={{ width: `${Math.round(((book.reading.furthest ?? 0) / book.chapter_count) * 100)}%` }} />
+            </div>
+            <button onClick={onRead} className="mt-1 flex w-full items-center justify-between gap-1 text-xs text-stone-500 hover:text-stone-800 dark:hover:text-stone-200">
+              <span className="truncate">Ch. {book.reading.position} of {book.chapter_count}</span>
+              <span className="shrink-0 font-medium text-brand-600 dark:text-brand-300">Continue →</span>
+            </button>
+          </>
+        ) : book.status === "ready" ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Ready
           </span>
-        )}
+        ) : null}
         {book.status === "failed" && (
           <div className="flex items-start gap-1 text-xs text-red-600 dark:text-red-400" title={book.error ?? ""}>
             <AlertTriangle size={12} className="mt-0.5 shrink-0" />
@@ -135,6 +152,7 @@ export default function Library({
   onRead,
   onReindex,
   onDelete,
+  onResetReading,
 }: {
   books: Book[];
   onUpload: (files: FileList | File[]) => void;
@@ -142,6 +160,7 @@ export default function Library({
   onRead: (id: number) => void;
   onReindex: (id: number) => void;
   onDelete: (book: Book) => void;
+  onResetReading: (book: Book) => void;
 }) {
   const [dragging, setDragging] = useState(false);
   const depth = useRef(0);
@@ -213,6 +232,7 @@ export default function Library({
                 onRead={() => onRead(b.id)}
                 onReindex={() => onReindex(b.id)}
                 onDelete={() => onDelete(b)}
+                onResetReading={() => onResetReading(b)}
               />
             ))}
           </div>

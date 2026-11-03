@@ -10,8 +10,10 @@ import type {
   Job,
   Length,
   Mention,
+  HighlightColor,
   NewNote,
   Note,
+  Reading,
   QuestionType,
   Quiz,
   QuizResult,
@@ -122,8 +124,14 @@ export const api = {
   // Notes
   notes: (bookId: number, tag?: string | null) => request<{ notes: Note[]; tags: string[] }>(`/api/books/${bookId}/notes${qs({ tag })}`),
   createNote: (bookId: number, note: NewNote) => request<Note>(`/api/books/${bookId}/notes`, json("POST", note)),
-  updateNote: (id: number, patch: { title?: string | null; content?: string; tags?: string[] }) =>
+  updateNote: (id: number, patch: { title?: string | null; content?: string; tags?: string[]; color?: HighlightColor; comment?: string }) =>
     request<Note>(`/api/notes/${id}`, json("PATCH", patch)),
+  highlights: (bookId: number, chapterId: number) => request<Note[]>(`/api/books/${bookId}/highlights${qs({ chapter_id: chapterId })}`),
+
+  // Reading progress
+  saveReading: (bookId: number, body: { position: number; offset: number; reached: boolean }) =>
+    request<Reading>(`/api/books/${bookId}/reading`, json("PUT", body)),
+  resetReading: (bookId: number) => request<void>(`/api/books/${bookId}/reading`, { method: "DELETE" }),
   deleteNote: (id: number) => request<void>(`/api/notes/${id}`, { method: "DELETE" }),
   exportNotesUrl: (bookId: number, format: "md" | "pdf", tag?: string | null) =>
     `/api/books/${bookId}/notes/export${qs({ format, tag })}`,

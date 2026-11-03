@@ -65,6 +65,26 @@ mark.search-hl {
 mark.search-active {
   @apply bg-orange-300 ring-2 ring-orange-400 dark:bg-orange-500/60 dark:ring-orange-400;
 }
+/* The reader's own highlights: light tint + coloured underline, so they never look like citations. */
+mark.user-hl {
+  @apply cursor-pointer border-b-2 text-inherit;
+}
+mark.hl-yellow {
+  @apply border-yellow-400 bg-yellow-100 dark:border-yellow-500 dark:bg-yellow-400/20;
+}
+mark.hl-green {
+  @apply border-emerald-400 bg-emerald-100 dark:border-emerald-500 dark:bg-emerald-400/20;
+}
+mark.hl-blue {
+  @apply border-sky-400 bg-sky-100 dark:border-sky-500 dark:bg-sky-400/20;
+}
+mark.hl-pink {
+  @apply border-pink-400 bg-pink-100 dark:border-pink-500 dark:bg-pink-400/20;
+}
+mark.user-hl.has-comment::after {
+  content: "✎";
+  @apply ml-0.5 align-super font-sans text-[0.6em] text-stone-500;
+}
 
 .typing-dot {
   animation: blink 1.4s infinite both;

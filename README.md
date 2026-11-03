@@ -18,7 +18,8 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * **Grounded chat** — hybrid search (pgvector + full-text, re-ranked), streamed answers with `[n]`
   citations that open the **reader** at the highlighted passage; follow-ups and saved history.
 * **Answer styles** — normal, ELI5, student, expert, analogy.
-* **Spoiler guard** — "I've read up to chapter N": enforced in every database query.
+* **Spoiler guard** — "I've read up to chapter N", or **Follow my reading** to track the furthest
+  chapter you've actually read in the reader; enforced in every database query.
 * **Talk to a character** (fiction) and **compare books** (citations from each book).
 * **Summaries** — short / medium / detailed, per chapter or whole book.
 * **Study** — generated quizzes (multiple choice, true/false, short answer) with scoring,
@@ -28,7 +29,11 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * **Quote finder** — verbatim quotes about a topic (each verified against the text), copy/share.
 * **Notes & highlights** — save answers, quotes or reader highlights, tag them, export to
   Markdown or PDF.
-* **Reader** — full text with search, page markers, font size, remembered position.
+* **Reader** — full text with search, page markers and font size. Select text to highlight it
+  in one of four colours and add your own note; highlights stay drawn in the text (click one to
+  edit or delete it).
+* **Reading progress** — resumes at the paragraph where you stopped; the library shows how far
+  you've got, with a "Start over" option. Jumping to a cited passage never moves your bookmark.
 * Suggested starter questions, dark/light mode, responsive layout, voice input and read-aloud
   (browser speech APIs).
 

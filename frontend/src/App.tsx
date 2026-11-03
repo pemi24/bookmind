@@ -26,7 +26,7 @@ import SummariesPanel from "./components/panels/SummariesPanel";
 import TimelinePanel from "./components/panels/TimelinePanel";
 import ReaderPanel, { type ReaderTarget } from "./components/ReaderPanel";
 import Sidebar from "./components/Sidebar";
-import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Source } from "./types";
+import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source } from "./types";
 import { isIndexing, loadPref, savePref } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
 
@@ -83,7 +83,20 @@ function useTheme() {
   return { dark, toggle };
 }
 
-function SpoilerControl({ chapters, value, onChange }: { chapters: ChapterInfo[]; value: number | null; onChange: (v: number | null) => void }) {
+/** Spoiler guard setting: a chapter position, "follow" (the furthest chapter read in the reader), or null (off). */
+type Spoiler = number | "follow" | null;
+
+function SpoilerControl({
+  chapters,
+  value,
+  furthest,
+  onChange,
+}: {
+  chapters: ChapterInfo[];
+  value: Spoiler;
+  furthest: number;
+  onChange: (v: Spoiler) => void;
+}) {
   return (
     <label
       className={`flex max-w-[16rem] min-w-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-xs ${
@@ -95,11 +108,12 @@ function SpoilerControl({ chapters, value, onChange }: { chapters: ChapterInfo[]
       <span className="hidden lg:inline">Read up to</span>
       <select
         value={value ?? ""}
-        onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
+        onChange={(e) => onChange(e.target.value === "follow" ? "follow" : e.target.value ? Number(e.target.value) : null)}
         className="min-w-0 flex-1 truncate bg-transparent outline-none"
         aria-label="Spoiler guard: chapters read"
       >
         <option value="">Whole book (no spoiler guard)</option>
+        <option value="follow">Follow my reading (Ch. {furthest})</option>
         {chapters.map((c) => (
           <option key={c.id} value={c.position}>
             Ch. {c.position}: {c.title}
@@ -119,7 +133,7 @@ export default function App() {
   const [drawer, setDrawer] = useState(false);
   const [reader, setReader] = useState<{ open: boolean; target: ReaderTarget | null }>({ open: false, target: null });
   const [chapters, setChapters] = useState<ChapterInfo[]>([]);
-  const [maxChapter, setMaxChapterState] = useState<number | null>(null);
+  const [spoiler, setSpoilerState] = useState<Spoiler>(null);
   const [notesKey, setNotesKey] = useState(0);
   const [health, setHealth] = useState<Health | null>(null);
   const watchers = useRef(new Map<number, () => void>());
@@ -198,13 +212,30 @@ export default function App() {
   const bookReady = book?.status === "ready";
   useEffect(() => {
     setChapters([]);
-    setMaxChapterState(bookId ? loadPref<number | null>(`spoiler:${bookId}`, null) : null);
+    setSpoilerState(bookId ? loadPref<Spoiler>(`spoiler:${bookId}`, null) : null);
     if (bookId && bookReady) api.chapters(bookId).then(setChapters).catch(() => {});
   }, [bookId, bookReady]);
 
-  const setMaxChapter = (v: number | null) => {
-    setMaxChapterState(v);
+  const setSpoiler = (v: Spoiler) => {
+    setSpoilerState(v);
     if (bookId) savePref(`spoiler:${bookId}`, v);
+  };
+  // "Follow my reading" = nothing past the furthest chapter actually read (chapter 1 before you start).
+  const furthestRead = book?.reading?.furthest ?? 1;
+  const maxChapter = spoiler === "follow" ? furthestRead : spoiler;
+
+  const setReading = useCallback((id: number, reading: Reading | null) => {
+    setBooks((bs) => bs.map((b) => (b.id === id ? { ...b, reading } : b)));
+  }, []);
+
+  const resetReading = async (b: Book) => {
+    if (!confirm(`Start “${b.title}” over? This forgets where you stopped and which chapters you've read. Highlights and notes are kept.`)) return;
+    try {
+      await api.resetReading(b.id);
+      setReading(b.id, null);
+    } catch (e) {
+      notify((e as Error).message);
+    }
   };
 
   // Reader: reset when switching books, unless we switched to open a passage there.
@@ -384,6 +415,7 @@ export default function App() {
                   onRead={(id) => navigate(`#/book/${id}/read`)}
                   onReindex={reindex}
                   onDelete={remove}
+                  onResetReading={resetReading}
                 />
               )}
             </div>
@@ -411,7 +443,7 @@ export default function App() {
                     .join(" · ")}
                 </p>
               </div>
-              {bookReady && chapters.length > 0 && <SpoilerControl chapters={chapters} value={maxChapter} onChange={setMaxChapter} />}
+              {bookReady && chapters.length > 0 && <SpoilerControl chapters={chapters} value={spoiler} furthest={furthestRead} onChange={setSpoiler} />}
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   onClick={() => (reader.open ? closeReader() : setReader((r) => ({ ...r, open: true })))}
@@ -492,17 +524,13 @@ export default function App() {
                   <ReaderPanel
                     bookId={book.id}
                     target={reader.target}
+                    resume={book.reading}
                     expanded={readMode}
                     onToggleExpand={() => navigate(readMode ? `#/book/${book.id}` : `#/book/${book.id}/read`)}
                     onClose={closeReader}
-                    onSaveHighlight={(h) =>
-                      saveNote({
-                        kind: "passage",
-                        content: h.text,
-                        tags: [],
-                        location: { chapter_id: h.chapterId, chapter_title: h.chapterTitle, page: h.page, char_start: h.start, char_end: h.end },
-                      })
-                    }
+                    onReading={(r) => setReading(book.id, r)}
+                    onNotesChanged={() => setNotesKey((k) => k + 1)}
+                    notify={notify}
                   />
                 </div>
               )}

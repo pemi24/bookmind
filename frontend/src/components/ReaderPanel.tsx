@@ -1,8 +1,9 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, Search, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, Search, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { ChapterInfo, ChapterText, SearchHit } from "../types";
+import type { ChapterInfo, ChapterText, HighlightColor, Note, Reading, SearchHit } from "../types";
 import { findLoose, loadPref, savePref } from "../utils";
+import { buttonClasses } from "./ui";
 
 export interface ReaderTarget {
   chapterId: number;
@@ -13,10 +14,22 @@ export interface ReaderTarget {
 interface Range {
   start: number;
   end: number;
-  kind: "cite" | "search" | "search-active";
+  kind: "cite" | "search" | "search-active" | "user";
+  color?: HighlightColor;
+  noteId?: number;
+  comment?: string | null;
 }
 
 const FONT_SIZES = [15, 17, 19, 22];
+const COLORS: HighlightColor[] = ["yellow", "green", "blue", "pink"];
+const SWATCH: Record<HighlightColor, string> = {
+  yellow: "bg-yellow-300",
+  green: "bg-emerald-300",
+  blue: "bg-sky-300",
+  pink: "bg-pink-300",
+};
+// A chapter that fits on one screen can't be scrolled; it counts as read after this long.
+const SHORT_CHAPTER_READ_MS = 15_000;
 
 /**
  * Render chapter text as paragraphs, wrapping highlight ranges in <mark> and inserting
@@ -61,6 +74,7 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
       const cite = cover.find((r) => r.kind === "cite");
       const active = cover.find((r) => r.kind === "search-active");
       const search = cover.find((r) => r.kind === "search");
+      const user = cover.filter((r) => r.kind === "user").pop(); // newest wins where highlights overlap
       if (active || search) {
         children.push(
           <mark key={a} className={active ? "search-hl search-active" : "search-hl"} data-target={active ? "search" : undefined}>
@@ -70,6 +84,17 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
       } else if (cite) {
         children.push(
           <mark key={a} className="cite-hl" data-target={cite.start >= pStart && a === Math.max(cite.start, pStart) ? "cite" : undefined}>
+            {seg}
+          </mark>,
+        );
+      } else if (user) {
+        children.push(
+          <mark
+            key={a}
+            className={`user-hl hl-${user.color ?? "yellow"}${user.comment && b === user.end ? " has-comment" : ""}`}
+            data-note={user.noteId}
+            title={user.comment ?? "Click to add a note or change the colour"}
+          >
             {seg}
           </mark>,
         );
@@ -86,15 +111,6 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
   return out;
 }
 
-export interface Highlight {
-  text: string;
-  chapterId: number;
-  chapterTitle: string;
-  page: number | null;
-  start: number;
-  end: number;
-}
-
 function pageAt(pageMap: [number, number][], offset: number): number | null {
   let page: number | null = null;
   for (const [o, p] of pageMap) {
@@ -107,22 +123,31 @@ function pageAt(pageMap: [number, number][], offset: number): number | null {
 export default function ReaderPanel({
   bookId,
   target,
+  resume,
   expanded,
   onToggleExpand,
   onClose,
-  onSaveHighlight,
+  onReading,
+  onNotesChanged,
+  notify,
 }: {
   bookId: number;
   target: ReaderTarget | null;
+  /** Where the reader stopped last time; used when the reader opens without a target passage. */
+  resume?: Reading | null;
   expanded: boolean;
   onToggleExpand: () => void;
   onClose: () => void;
-  onSaveHighlight?: (h: Highlight) => void;
+  onReading?: (r: Reading) => void;
+  onNotesChanged?: () => void;
+  notify?: (msg: string) => void;
 }) {
   const [selection, setSelection] = useState<{ text: string; near: number; top: number; left: number } | null>(null);
+  const [editing, setEditing] = useState<{ note: Note; draft: string; top: number; left: number } | null>(null);
   const [chapters, setChapters] = useState<ChapterInfo[]>([]);
   const [chapterId, setChapterId] = useState<number | null>(target?.chapterId ?? null);
   const [chapter, setChapter] = useState<ChapterText | null>(null);
+  const [highlights, setHighlights] = useState<Note[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fontIdx, setFontIdx] = useState(() => loadPref("reader:font", 1));
   const [query, setQuery] = useState("");
@@ -131,7 +156,52 @@ export default function ReaderPanel({
   const [active, setActive] = useState(0);
   const [showHits, setShowHits] = useState(false);
   const [scrollNonce, setScrollNonce] = useState(0);
+  const [fraction, setFraction] = useState(0); // how far through the current chapter
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Reading progress. Only the reader's own navigation and scrolling count: jumping to a cited
+  // passage or a search hit must not move the bookmark or mark chapters as read.
+  const resumeRef = useRef<Reading | null>(target ? null : resume ?? null);
+  const byUser = useRef(!target);
+  const userScrolled = useRef(false);
+  const reached = useRef(false);
+  const pending = useRef<(() => Promise<void>) | null>(null);
+  const saveTimer = useRef<number>();
+  const onReadingRef = useRef(onReading);
+  onReadingRef.current = onReading;
+
+  const flush = useCallback(() => {
+    window.clearTimeout(saveTimer.current);
+    const run = pending.current;
+    pending.current = null;
+    return run ? run() : Promise.resolve();
+  }, []);
+
+  /** Paragraph offset at the top of the screen, to resume at the same spot. */
+  const topOffset = () => {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    const top = el.getBoundingClientRect().top;
+    for (const p of el.querySelectorAll<HTMLElement>("p[data-p]")) {
+      if (p.getBoundingClientRect().bottom > top + 8) return Number(p.dataset.p);
+    }
+    return 0;
+  };
+
+  const report = (isReached: boolean) => {
+    if (!chapter || !onReadingRef.current) return;
+    reached.current ||= isReached;
+    const body = { position: chapter.position, offset: topOffset(), reached: reached.current };
+    pending.current = () =>
+      api
+        .saveReading(bookId, body)
+        .then((r) => onReadingRef.current?.(r))
+        .catch(() => {});
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(flush, 1200);
+  };
+
+  useEffect(() => () => void flush(), [flush]); // save the last position when the reader closes
 
   // Chapter list; open the target, else where the reader left off, else chapter 1.
   useEffect(() => {
@@ -141,8 +211,9 @@ export default function ReaderPanel({
         setChapters(list);
         setChapterId((cur) => {
           if (cur) return cur;
+          const r = resumeRef.current;
           const last = loadPref<number | null>(`reader:last:${bookId}`, null);
-          return list.find((c) => c.id === last)?.id ?? list[0]?.id ?? null;
+          return (r && list.find((c) => c.position === r.position)?.id) ?? list.find((c) => c.id === last)?.id ?? list[0]?.id ?? null;
         });
       })
       .catch((e) => setError(e.message));
@@ -150,11 +221,14 @@ export default function ReaderPanel({
 
   useEffect(() => {
     if (target) {
+      void flush();
+      byUser.current = false;
+      resumeRef.current = null;
       setChapterId(target.chapterId);
       setHits(null);
       setScrollNonce((n) => n + 1);
     }
-  }, [target]);
+  }, [target, flush]);
 
   useEffect(() => {
     if (!chapterId) return;
@@ -170,9 +244,47 @@ export default function ReaderPanel({
     };
   }, [chapterId, bookId]);
 
+  // Saved highlights for this chapter.
+  useEffect(() => {
+    setHighlights([]);
+    setEditing(null);
+    if (!chapterId) return;
+    let cancelled = false;
+    api
+      .highlights(bookId, chapterId)
+      .then((h) => !cancelled && setHighlights(h))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, chapterId]);
+
+  // New chapter on screen: reset per-chapter progress; short chapters count as read after a while.
+  useEffect(() => {
+    userScrolled.current = false;
+    reached.current = false;
+    setFraction(0);
+    const el = scrollRef.current;
+    if (!chapter || !el || !byUser.current) return;
+    const t = window.setTimeout(() => {
+      if (el.scrollHeight <= el.clientHeight + 40) {
+        setFraction(1);
+        report(true);
+      }
+    }, SHORT_CHAPTER_READ_MS);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapter]);
+
   const ranges = useMemo<Range[]>(() => {
     if (!chapter) return [];
     const r: Range[] = [];
+    for (const n of highlights) {
+      const { chapter_id, char_start, char_end } = n.location;
+      if (chapter_id === chapter.id && char_start !== undefined && char_end !== undefined && char_end > char_start) {
+        r.push({ start: char_start, end: char_end, kind: "user", color: n.color ?? "yellow", noteId: n.id, comment: n.comment });
+      }
+    }
     if (target?.highlight && target.chapterId === chapter.id) r.push({ ...target.highlight, kind: "cite" });
     if (hits) {
       hits.forEach((h, i) => {
@@ -180,11 +292,11 @@ export default function ReaderPanel({
       });
     }
     return r;
-  }, [chapter, target, hits, active]);
+  }, [chapter, highlights, target, hits, active]);
 
   const body = useMemo(() => (chapter ? renderChapter(chapter.text, ranges, chapter.page_map) : null), [chapter, ranges]);
 
-  // Scroll to the active search hit, else the cited passage, else the top.
+  // Scroll to the active search hit, else the cited passage, else where the reader left off, else the top.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !chapter) return;
@@ -192,7 +304,14 @@ export default function ReaderPanel({
       const mark =
         el.querySelector<HTMLElement>("mark[data-target='search']") ?? el.querySelector<HTMLElement>("mark[data-target='cite']");
       if (!mark) {
-        el.scrollTop = 0;
+        const r = resumeRef.current;
+        resumeRef.current = null;
+        if (r && r.position === chapter.position && r.offset > 0) {
+          const para = [...el.querySelectorAll<HTMLElement>("p[data-p]")].filter((p) => Number(p.dataset.p) <= r.offset).pop();
+          el.scrollTop = para ? Math.max(para.offsetTop - 8, 0) : 0;
+        } else {
+          el.scrollTop = 0;
+        }
         return;
       }
       const top = Math.max(mark.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - el.clientHeight / 4, 0);
@@ -201,6 +320,19 @@ export default function ReaderPanel({
     });
     return () => cancelAnimationFrame(id);
   }, [chapter, scrollNonce]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const f = el.scrollHeight <= el.clientHeight ? 1 : Math.min(el.scrollTop / (el.scrollHeight - el.clientHeight), 1);
+    setFraction(f);
+    // Halfway through a chapter you've been reading counts as having read into it.
+    if (userScrolled.current) report(f >= 0.5);
+  };
+  const markUserScroll = () => {
+    userScrolled.current = true;
+    byUser.current = true;
+  };
 
   const runSearch = async () => {
     const q = query.trim();
@@ -221,6 +353,10 @@ export default function ReaderPanel({
     if (!n) return;
     const idx = ((i % n) + n) % n;
     setActive(idx);
+    if (list[idx].chapter_id !== chapterId) {
+      void flush();
+      byUser.current = false;
+    }
     setChapterId(list[idx].chapter_id);
     setScrollNonce((x) => x + 1);
   };
@@ -237,11 +373,12 @@ export default function ReaderPanel({
     savePref("reader:font", next);
   };
 
-  // Text selection -> floating "Save highlight" button.
-  const onMouseUp = () => {
+  // Text selection -> floating highlight toolbar.
+  const onMouseUp = (e?: React.MouseEvent) => {
+    if ((e?.target as HTMLElement | undefined)?.closest("[data-reader-ui]")) return;
     const el = scrollRef.current;
     const sel = window.getSelection();
-    if (!el || !sel || sel.isCollapsed || !onSaveHighlight) return setSelection(null);
+    if (!el || !sel || sel.isCollapsed) return setSelection(null);
     const text = sel.toString().trim();
     const range = sel.getRangeAt(0);
     if (text.length < 3 || !el.contains(range.commonAncestorContainer)) return setSelection(null);
@@ -249,38 +386,100 @@ export default function ReaderPanel({
     const box = el.getBoundingClientRect();
     const startEl = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
     const near = Number(startEl?.closest<HTMLElement>("p[data-p]")?.dataset.p ?? 0);
+    setEditing(null);
     setSelection({
       text,
       near,
-      top: rect.top - box.top + el.scrollTop - 40,
-      left: Math.min(Math.max(rect.left - box.left + rect.width / 2, 70), box.width - 70),
+      top: rect.top - box.top + el.scrollTop - 44,
+      left: Math.min(Math.max(rect.left - box.left + rect.width / 2, 100), box.width - 100),
     });
   };
 
-  const saveSelection = () => {
-    if (!selection || !chapter || !onSaveHighlight) return;
+  const saveSelection = async (color: HighlightColor, withNote = false) => {
+    if (!selection || !chapter) return;
     const loc = findLoose(chapter.text, selection.text, selection.near);
     const [start, end] = loc ?? [selection.near, selection.near];
-    onSaveHighlight({
-      text: loc ? chapter.text.slice(start, end) : selection.text,
-      chapterId: chapter.id,
-      chapterTitle: chapter.title,
-      page: pageAt(chapter.page_map, start),
-      start,
-      end: loc ? end : start,
-    });
+    const at = { top: selection.top + 76, left: selection.left };
     window.getSelection()?.removeAllRanges();
     setSelection(null);
+    try {
+      const note = await api.createNote(bookId, {
+        kind: "passage",
+        content: loc ? chapter.text.slice(start, end) : selection.text,
+        tags: [],
+        color,
+        location: { chapter_id: chapter.id, chapter_title: chapter.title, page: pageAt(chapter.page_map, start), char_start: start, char_end: loc ? end : start },
+      });
+      setHighlights((hs) => [...hs, note]);
+      onNotesChanged?.();
+      if (!loc) notify?.("Saved to notes, but the exact spot couldn't be found to show it in the text.");
+      else if (withNote) setEditing({ note, draft: "", ...at });
+    } catch (e) {
+      notify?.((e as Error).message);
+    }
+  };
+
+  // Click a saved highlight -> popover to recolour, comment on or delete it.
+  const openHighlight = (mark: HTMLElement) => {
+    const note = highlights.find((n) => n.id === Number(mark.dataset.note));
+    const el = scrollRef.current;
+    if (!note || !el) return;
+    const rect = mark.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    setEditing({
+      note,
+      draft: note.comment ?? "",
+      top: rect.bottom - box.top + el.scrollTop + 8,
+      left: Math.min(Math.max(rect.left - box.left + rect.width / 2, 150), box.width - 150),
+    });
+  };
+
+  const updateHighlight = async (patch: { color?: HighlightColor; comment?: string }) => {
+    if (!editing) return;
+    try {
+      const n = await api.updateNote(editing.note.id, patch);
+      setHighlights((hs) => hs.map((h) => (h.id === n.id ? n : h)));
+      setEditing((ed) => (patch.comment !== undefined ? null : ed && { ...ed, note: n }));
+      onNotesChanged?.();
+    } catch (e) {
+      notify?.((e as Error).message);
+    }
+  };
+
+  const removeHighlight = async () => {
+    if (!editing) return;
+    try {
+      await api.deleteNote(editing.note.id);
+      setHighlights((hs) => hs.filter((h) => h.id !== editing.note.id));
+      setEditing(null);
+      onNotesChanged?.();
+    } catch (e) {
+      notify?.((e as Error).message);
+    }
   };
 
   const idx = chapters.findIndex((c) => c.id === chapterId);
   const prev = idx > 0 ? chapters[idx - 1] : null;
   const next = idx >= 0 && idx < chapters.length - 1 ? chapters[idx + 1] : null;
-  const goChapter = (id: number) => {
+  /** The reader's own chapter navigation: moves the bookmark. `finished` = they read to the end. */
+  const goChapter = (id: number, finished = false) => {
+    if (finished) report(true);
+    const position = chapters.find((c) => c.id === id)?.position;
+    void flush().then(() => {
+      if (position && onReadingRef.current) {
+        api
+          .saveReading(bookId, { position, offset: 0, reached: false })
+          .then((r) => onReadingRef.current?.(r))
+          .catch(() => {});
+      }
+    });
+    byUser.current = true;
+    resumeRef.current = null;
     setChapterId(id);
     setScrollNonce((n) => n + 1);
   };
   const iconBtn = "rounded-md p-1.5 text-stone-500 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-800";
+  const bookFraction = chapters.length && idx >= 0 ? (idx + fraction) / chapters.length : 0;
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
@@ -317,6 +516,9 @@ export default function ReaderPanel({
         <button onClick={onClose} className={iconBtn} title="Close reader">
           <X size={18} />
         </button>
+      </div>
+      <div className="h-0.5 bg-stone-100 dark:bg-stone-800" title={`${Math.round(bookFraction * 100)}% through the book`}>
+        <div className="h-full bg-brand-500 transition-[width]" style={{ width: `${bookFraction * 100}%` }} />
       </div>
 
       {/* Search */}
@@ -397,21 +599,93 @@ export default function ReaderPanel({
       {/* Text */}
       <div
         ref={scrollRef}
-        onClick={() => setShowHits(false)}
+        onClick={(e) => {
+          setShowHits(false);
+          const t = e.target as HTMLElement;
+          if (t.closest("[data-reader-ui]")) return;
+          const mark = t.closest<HTMLElement>("mark[data-note]");
+          if (mark && window.getSelection()?.isCollapsed !== false) openHighlight(mark);
+          else setEditing(null);
+        }}
         onMouseUp={onMouseUp}
         onTouchEnd={() => window.setTimeout(onMouseUp, 50)}
-        className="relative flex-1 overflow-y-auto px-5 py-4 font-serif sm:px-8"
+        onScroll={onScroll}
+        onWheel={markUserScroll}
+        onTouchMove={markUserScroll}
+        onPointerDown={markUserScroll /* includes dragging the scrollbar */}
+        onKeyDown={markUserScroll}
+        tabIndex={-1}
+        className="relative flex-1 overflow-y-auto px-5 py-4 font-serif outline-none sm:px-8"
         style={{ fontSize: FONT_SIZES[fontIdx], lineHeight: 1.75 }}
       >
         {selection && (
-          <button
+          <div
+            data-reader-ui
             onMouseDown={(e) => e.preventDefault() /* keep the text selection */}
-            onClick={saveSelection}
             style={{ top: Math.max(selection.top, 4), left: selection.left }}
-            className="absolute z-10 -translate-x-1/2 rounded-lg bg-stone-900 px-3 py-1.5 font-sans text-xs font-medium whitespace-nowrap text-white shadow-lg hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900"
+            className="absolute z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-lg bg-stone-900 px-2 py-1.5 font-sans shadow-lg dark:bg-stone-100"
           >
-            ✎ Save highlight
-          </button>
+            {COLORS.map((c) => (
+              <button
+                key={c}
+                onClick={() => saveSelection(c)}
+                className={`h-5 w-5 rounded-full border-2 border-white/60 transition hover:scale-110 dark:border-stone-900/30 ${SWATCH[c]}`}
+                title={`Highlight in ${c}`}
+                aria-label={`Highlight in ${c}`}
+              />
+            ))}
+            <span className="h-4 w-px bg-white/30 dark:bg-stone-400" />
+            <button onClick={() => saveSelection("yellow", true)} className="px-1 text-xs font-medium whitespace-nowrap text-white hover:underline dark:text-stone-900">
+              ✎ Add note
+            </button>
+          </div>
+        )}
+        {editing && (
+          <div
+            data-reader-ui
+            style={{ top: editing.top, left: editing.left }}
+            className="absolute z-20 w-72 max-w-[calc(100%-1rem)] -translate-x-1/2 rounded-xl border border-stone-200 bg-white p-3 font-sans text-sm shadow-xl dark:border-stone-700 dark:bg-stone-900"
+          >
+            <div className="flex items-center gap-1.5">
+              {COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => updateHighlight({ color: c })}
+                  className={`h-5 w-5 rounded-full ${SWATCH[c]} ${(editing.note.color ?? "yellow") === c ? "ring-2 ring-stone-500 ring-offset-1 dark:ring-stone-300 dark:ring-offset-stone-900" : ""}`}
+                  title={`Colour: ${c}`}
+                  aria-label={`Colour: ${c}`}
+                />
+              ))}
+              <button onClick={removeHighlight} className="ml-auto rounded p-1 text-stone-400 hover:text-red-600" title="Delete highlight" aria-label="Delete highlight">
+                <Trash2 size={14} />
+              </button>
+              <button onClick={() => setEditing(null)} className="rounded p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200" title="Close" aria-label="Close">
+                <X size={14} />
+              </button>
+            </div>
+            <textarea
+              autoFocus
+              value={editing.draft}
+              onChange={(e) => setEditing({ ...editing, draft: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) updateHighlight({ comment: editing.draft });
+                if (e.key === "Escape") setEditing(null);
+              }}
+              rows={3}
+              placeholder="Your note on this passage…"
+              className="mt-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-sm outline-none focus:border-brand-500 dark:border-stone-700"
+              aria-label="Note on this highlight"
+            />
+            <div className="mt-2 flex justify-end">
+              <button
+                disabled={editing.draft.trim() === (editing.note.comment ?? "")}
+                onClick={() => updateHighlight({ comment: editing.draft })}
+                className={buttonClasses("primary")}
+              >
+                Save note
+              </button>
+            </div>
+          </div>
         )}
         <div className={expanded ? "mx-auto max-w-2xl" : ""}>
           {error && <p className="font-sans text-sm text-red-600">{error}</p>}
@@ -430,7 +704,7 @@ export default function ReaderPanel({
                   </button>
                 ) : <span />}
                 {next && (
-                  <button onClick={() => goChapter(next.id)} className="min-w-0 truncate text-right text-brand-600 hover:underline dark:text-brand-300">
+                  <button onClick={() => goChapter(next.id, true)} className="min-w-0 truncate text-right text-brand-600 hover:underline dark:text-brand-300">
                     {next.title} →
                   </button>
                 )}

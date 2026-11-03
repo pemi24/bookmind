@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,7 +35,15 @@ def book_dict(b: Book, chapter_count: int | None = None) -> dict:
         "created_at": b.created_at.isoformat() if b.created_at else None,
         "indexed_at": b.indexed_at.isoformat() if b.indexed_at else None,
         "chapter_count": chapter_count,
+        "reading": reading_dict(b),
     }
+
+
+def reading_dict(b: Book) -> dict | None:
+    if b.reading_position is None:
+        return None
+    return {"position": b.reading_position, "offset": b.reading_offset or 0, "furthest": b.furthest_position,
+            "updated_at": b.reading_updated_at.isoformat() if b.reading_updated_at else None}
 
 
 async def get_book_or_404(db: AsyncSession, book_id: int) -> Book:
@@ -154,6 +163,36 @@ async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
     )).all()
     return [{"id": r[0], "position": r[1], "title": r[2], "start_page": r[3], "end_page": r[4], "chars": r[5]}
             for r in rows]
+
+
+class ReadingUpdate(BaseModel):
+    position: int = Field(ge=1)  # chapter position
+    offset: int = Field(default=0, ge=0)  # char offset of the paragraph at the top of the screen
+    reached: bool = False  # the reader has actually read into this chapter (not just jumped there)
+
+
+@router.put("/books/{book_id}/reading")
+async def save_reading(book_id: int, req: ReadingUpdate, db: AsyncSession = Depends(get_db)):
+    """Remember where the reader is; `reached` also advances the furthest chapter read (never moves back)."""
+    book = await get_book_or_404(db, book_id)
+    exists = await db.scalar(select(Chapter.id).where(Chapter.book_id == book_id, Chapter.position == req.position))
+    if exists is None:
+        raise HTTPException(400, "This book has no such chapter.")
+    book.reading_position, book.reading_offset = req.position, req.offset
+    if req.reached:
+        book.furthest_position = max(book.furthest_position or 0, req.position)
+    book.reading_updated_at = func.now()
+    await db.commit()
+    await db.refresh(book)
+    return reading_dict(book)
+
+
+@router.delete("/books/{book_id}/reading", status_code=204)
+async def reset_reading(book_id: int, db: AsyncSession = Depends(get_db)):
+    """Start the book over: forget the position and the furthest chapter read."""
+    book = await get_book_or_404(db, book_id)
+    book.reading_position = book.reading_offset = book.furthest_position = book.reading_updated_at = None
+    await db.commit()
 
 
 @router.get("/chapters/{chapter_id}")

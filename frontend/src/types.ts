@@ -19,6 +19,15 @@ export interface Book {
   created_at: string;
   indexed_at: string | null;
   chapter_count: number | null;
+  reading: Reading | null;
+}
+
+/** Where the reader stopped. Positions are chapter positions; furthest = furthest chapter actually read. */
+export interface Reading {
+  position: number;
+  offset: number;
+  furthest: number | null;
+  updated_at: string | null;
 }
 
 export interface ChapterInfo {
@@ -236,13 +245,19 @@ export interface Note {
   message_id: number | null;
   location: { chapter_id?: number; chapter_title?: string; page?: number | null; char_start?: number; char_end?: number };
   tags: string[];
+  color: HighlightColor | null;
+  comment: string | null;
   created_at: string | null;
 }
 
-export type NewNote = Omit<Note, "id" | "book_id" | "created_at" | "chunk_id" | "message_id" | "title"> & {
+export type HighlightColor = "yellow" | "green" | "blue" | "pink";
+
+export type NewNote = Omit<Note, "id" | "book_id" | "created_at" | "chunk_id" | "message_id" | "title" | "color" | "comment"> & {
   title?: string | null;
   chunk_id?: number | null;
   message_id?: number | null;
+  color?: HighlightColor | null;
+  comment?: string | null;
 };
 
 export interface Health {

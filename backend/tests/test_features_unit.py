@@ -79,7 +79,7 @@ def test_clean_question_recovers_answers():
 
 def _note(**kw):
     base = dict(kind="quote", title=None, content="“Curiouser and curiouser!” [1]", tags=["fav"],
-                location={"chapter_title": "Chapter II", "page": 12})
+                location={"chapter_title": "Chapter II", "page": 12}, color=None, comment=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -89,5 +89,7 @@ def test_exports():
     md = to_markdown(book, [_note(), _note(kind="answer", content="She grows. [2]", title="Why?")])
     assert "# Notes — Alice’s Adventures" in md and "> “Curiouser and curiouser!”" in md
     assert "[1]" not in md and "#fav" in md and "Chapter II · p. 12" in md
-    pdf = to_pdf(book, [_note()])
+    md = to_markdown(book, [_note(kind="passage", comment="Alice is changing.")])
+    assert "> “Curiouser and curiouser!”\n\nAlice is changing." in md
+    pdf = to_pdf(book, [_note(), _note(kind="passage", comment="Alice is changing.")])
     assert pdf.startswith(b"%PDF") and len(pdf) > 500

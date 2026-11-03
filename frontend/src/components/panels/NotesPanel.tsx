@@ -1,11 +1,17 @@
 import { Download, NotebookPen, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
-import type { Note } from "../../types";
+import type { HighlightColor, Note } from "../../types";
 import { useWorkspace } from "../../workspace";
 import { Button, buttonClasses, EmptyState, ErrorBox, LocationChip, Markdown, PanelShell } from "../ui";
 
 const KIND_LABEL: Record<Note["kind"], string> = { note: "Note", answer: "Answer", passage: "Highlight", quote: "Quote" };
+const QUOTE_BORDER: Record<HighlightColor, string> = {
+  yellow: "border-amber-300",
+  green: "border-emerald-400",
+  blue: "border-sky-400",
+  pink: "border-pink-400",
+};
 
 function TagEditor({ tags, onSave }: { tags: string[]; onSave: (tags: string[]) => void }) {
   const [value, setValue] = useState(tags.join(", "));
@@ -141,7 +147,10 @@ export default function NotesPanel({ refreshKey }: { refreshKey: number }) {
             </div>
             <div className="mt-1">
               {n.kind === "quote" || n.kind === "passage" ? (
-                <blockquote className="border-l-4 border-amber-300 pl-3 font-serif text-[16px] leading-relaxed">{n.content}</blockquote>
+                <>
+                  <blockquote className={`border-l-4 pl-3 font-serif text-[16px] leading-relaxed ${QUOTE_BORDER[n.color ?? "yellow"]}`}>{n.content}</blockquote>
+                  {n.comment && <p className="mt-2 text-sm whitespace-pre-line text-stone-600 dark:text-stone-300">✎ {n.comment}</p>}
+                </>
               ) : (
                 <Markdown text={n.content.replace(/\s?\[\d+(?:\s*[,–-]\s*\d+)*\]/g, "")} />
               )}

@@ -68,6 +68,11 @@ class Book(Base):
     embedding_model: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Reading progress (chapter positions survive re-indexing; chapter ids don't).
+    reading_position: Mapped[int | None] = mapped_column(Integer)  # chapter the reader is on
+    reading_offset: Mapped[int | None] = mapped_column(Integer)  # char offset of the paragraph at the top
+    furthest_position: Mapped[int | None] = mapped_column(Integer)  # furthest chapter actually read
+    reading_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     chapters: Mapped[list[Chapter]] = relationship(
         back_populates="book", order_by="Chapter.position", passive_deletes=True
@@ -178,6 +183,8 @@ class Note(Base):
     message_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
     location: Mapped[dict] = mapped_column(JSONB, default=dict)  # chapter/page labels for export
     tags: Mapped[list[str]] = mapped_column(ARRAY(String(60)), default=list)
+    color: Mapped[str | None] = mapped_column(String(20))  # reader highlight colour
+    comment: Mapped[str | None] = mapped_column(Text)  # the reader's own words on a highlight
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

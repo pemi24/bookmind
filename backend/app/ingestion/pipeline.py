@@ -230,6 +230,11 @@ async def _finalize(book_id: int, doc, n_chapters: int, total: int) -> None:
         book.progress = 1.0
         book.status_message = f"Indexed {n_chapters} chapters, {total} passages"
         book.indexed_at = datetime.now(timezone.utc)
+        # A re-index can split chapters differently; keep reading progress inside the book.
+        if book.reading_position and book.reading_position > n_chapters:
+            book.reading_position, book.reading_offset = n_chapters, 0
+        if book.furthest_position and book.furthest_position > n_chapters:
+            book.furthest_position = n_chapters
         await db.commit()
 
 

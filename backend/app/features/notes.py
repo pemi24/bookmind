@@ -49,6 +49,8 @@ def to_markdown(book: Book, notes: list[Note]) -> str:
         if n.kind in ("quote", "passage"):
             body = "\n".join(f"> {line}" if line else ">" for line in body.split("\n"))
         lines += [body, ""]
+        if n.comment:
+            lines += [n.comment, ""]
     return "\n".join(lines)
 
 
@@ -97,6 +99,10 @@ def to_pdf(book: Book, notes: list[Note]) -> bytes:
         pdf.set_font(family, "I" if n.kind in ("quote", "passage") else "", 11)
         pdf.ln(1)
         pdf.multi_cell(width, 6, txt(body))
+        if n.comment:
+            pdf.set_font(family, "", 11)
+            pdf.ln(1)
+            pdf.multi_cell(width, 6, txt(n.comment))
         pdf.ln(3)
         pdf.set_draw_color(220, 220, 220)
         pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())

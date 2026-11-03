@@ -18,6 +18,7 @@ from app.features import notes as export
 router = APIRouter(prefix="/api", tags=["notes"])
 
 Kind = Literal["note", "answer", "passage", "quote"]
+Color = Literal["yellow", "green", "blue", "pink"]
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -32,7 +33,7 @@ def _clean_tags(tags: list[str]) -> list[str]:
 def note_dict(n: Note) -> dict:
     return {"id": n.id, "book_id": n.book_id, "kind": n.kind, "title": n.title, "content": n.content,
             "chunk_id": n.chunk_id, "message_id": n.message_id, "location": n.location or {}, "tags": n.tags or [],
-            "created_at": n.created_at.isoformat() if n.created_at else None}
+            "color": n.color, "comment": n.comment, "created_at": n.created_at.isoformat() if n.created_at else None}
 
 
 class NoteCreate(BaseModel):
@@ -43,19 +44,24 @@ class NoteCreate(BaseModel):
     message_id: int | None = None
     location: dict = Field(default_factory=dict)  # chapter_id, chapter_title, page, char_start, char_end
     tags: list[str] = Field(default_factory=list)
+    color: Color | None = None
+    comment: str | None = Field(default=None, max_length=10_000)
 
 
 class NoteUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     content: str | None = Field(default=None, min_length=1, max_length=50_000)
     tags: list[str] | None = None
+    color: Color | None = None
+    comment: str | None = Field(default=None, max_length=10_000)  # "" clears it
 
 
 @router.post("/books/{book_id}/notes", status_code=201)
 async def create_note(book_id: int, req: NoteCreate, db: AsyncSession = Depends(get_db)):
     await get_book_or_404(db, book_id)
     note = Note(book_id=book_id, kind=req.kind, title=req.title, content=req.content, chunk_id=req.chunk_id,
-                message_id=req.message_id, location=req.location, tags=_clean_tags(req.tags))
+                message_id=req.message_id, location=req.location, tags=_clean_tags(req.tags),
+                color=req.color, comment=(req.comment or "").strip() or None)
     db.add(note)
     await db.commit()
     await db.refresh(note)
@@ -77,6 +83,21 @@ async def list_notes(book_id: int, tag: str | None = None, db: AsyncSession = De
     return {"notes": [note_dict(n) for n in notes], "tags": all_tags}
 
 
+@router.get("/books/{book_id}/highlights")
+async def chapter_highlights(book_id: int, chapter_id: int, db: AsyncSession = Depends(get_db)):
+    """Saved notes that point at a text range in this chapter, for drawing them in the reader."""
+    await get_book_or_404(db, book_id)
+    loc = Note.location
+    rows = (await db.execute(
+        select(Note).where(
+            Note.book_id == book_id,
+            loc["chapter_id"].as_integer() == chapter_id,
+            loc["char_end"].as_integer() > loc["char_start"].as_integer(),
+        ).order_by(Note.created_at)
+    )).scalars()
+    return [note_dict(n) for n in rows]
+
+
 @router.patch("/notes/{note_id}")
 async def update_note(note_id: int, req: NoteUpdate, db: AsyncSession = Depends(get_db)):
     note = await db.get(Note, note_id)
@@ -88,6 +109,10 @@ async def update_note(note_id: int, req: NoteUpdate, db: AsyncSession = Depends(
         note.content = req.content
     if req.tags is not None:
         note.tags = _clean_tags(req.tags)
+    if req.color is not None:
+        note.color = req.color
+    if req.comment is not None:
+        note.comment = req.comment.strip() or None
     await db.commit()
     await db.refresh(note)
     return note_dict(note)
