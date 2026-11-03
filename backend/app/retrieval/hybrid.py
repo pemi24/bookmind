@@ -147,10 +147,13 @@ async def search_book(
 
     reranker = get_reranker() if use_rerank else None
     if reranker and cands:
-        scores = await asyncio.to_thread(reranker.score, query, [p.text for p in cands])
-        for p, sc in zip(cands, scores):
+        # The cross-encoder dominates search time on a CPU, so only the best fused candidates are re-read.
+        head = cands[: max(s.rerank_candidates, top_k)]
+        scores = await asyncio.to_thread(reranker.score, query, [p.text for p in head])
+        for p, sc in zip(head, scores):
             p.score = sc
-        cands.sort(key=lambda p: p.score, reverse=True)
+        head.sort(key=lambda p: p.score, reverse=True)
+        cands = head
     return cands[:top_k]
 
 

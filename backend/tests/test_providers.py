@@ -308,3 +308,29 @@ async def test_anthropic_unconfigured_raises_clear_error():
     with pytest.raises(LLMError) as e:
         _ = [c async for c in a.stream_chat("s", [{"role": "user", "content": "q"}])]
     assert "ANTHROPIC_API_KEY" in e.value.message and e.value.status == 503
+
+
+async def test_gemini_daily_quota_goes_straight_to_fallback(monkeypatch):
+    from app.llm.providers import gemini as gmod
+
+    monkeypatch.setattr(gmod, "_RETRY_DELAYS", (0.0, 0.0))
+    monkeypatch.setattr(gmod, "_exhausted", {})
+    quota = {"error": {"code": 429, "message": "You exceeded your current quota", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "20"}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "62326s"}]}}
+    urls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        if "gemini-flash-lite-latest" in str(request.url):
+            return httpx.Response(200, text='data: {"candidates": [{"content": {"parts": [{"text": "lite"}]}}]}\r\n\r\n')
+        return httpx.Response(429, json=quota)
+
+    p = gemini(handler)
+    out = "".join([c async for c in p.stream_chat("s", [{"role": "user", "content": "q"}])])
+    assert out == "lite" and len(urls) == 2  # no retries on a used-up daily quota
+    urls.clear()
+    out = "".join([c async for c in p.stream_chat("s", [{"role": "user", "content": "q"}])])
+    assert out == "lite" and len(urls) == 1 and "gemini-flash-lite-latest" in urls[0]  # remembered: main model skipped
+    assert p.fast_model == "gemini-flash-lite-latest"  # side tasks spare the main model's quota

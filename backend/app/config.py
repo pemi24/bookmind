@@ -70,6 +70,7 @@ class Settings(BaseSettings):
 
     # --- Re-ranking ---
     rerank_enabled: bool = True
+    rerank_candidates: int = 24  # fused candidates the re-ranker re-reads (its cost grows with this)
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
 
     # --- Chunking (approximate tokens; 1 token ~= 4 chars of English) ---

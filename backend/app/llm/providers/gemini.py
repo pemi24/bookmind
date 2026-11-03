@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -20,6 +21,23 @@ log = logging.getLogger(__name__)
 _RETRY_STATUSES = (429, 500, 502, 503, 504)
 _RETRY_DELAYS = (2.0, 5.0)
 _RETRIES = len(_RETRY_DELAYS)
+# Models whose free *daily* quota is used up -> time.monotonic() when to try them again.
+_exhausted: dict[str, float] = {}
+
+
+def _daily_quota_reset(body: bytes) -> float | None:
+    """Seconds until a used-up per-day quota resets (Google's retryDelay), or None for other 429s."""
+    try:
+        details = json.loads(body).get("error", {}).get("details", [])
+    except (ValueError, AttributeError):
+        return None
+    if not any("PerDay" in (v.get("quotaId") or "") for d in details for v in d.get("violations", [])):
+        return None
+    delay = next((d.get("retryDelay") for d in details if d.get("retryDelay")), "3600s")
+    try:
+        return max(float(str(delay).rstrip("s")), 60.0)
+    except ValueError:
+        return 3600.0
 
 
 class GeminiProvider(LLMProvider):
@@ -97,7 +115,7 @@ class GeminiProvider(LLMProvider):
                                 yield chunk
                             return
                         failure = (r.status_code, await r.aread())
-                    if not await self._should_retry(*failure, attempt):
+                    if not await self._should_retry(m, *failure, attempt):
                         break  # nothing was shown yet, so retrying can't duplicate text
                 if failure[0] not in _RETRY_STATUSES:
                     break  # a bad request or key won't work on another model either
@@ -107,14 +125,29 @@ class GeminiProvider(LLMProvider):
             raise LLMError("Gemini timed out. Please try again.", 504) from e
         raise self._error(*failure)
 
-    def _models(self, model: str) -> list[str]:
-        """The requested model, then the fallback for when it stays overloaded."""
-        fallback = self.settings.gemini_fallback_model.strip()
-        return [model, fallback] if fallback and fallback != model else [model]
+    @property
+    def fast_model(self) -> str:
+        # Side tasks (rewording follow-ups, alternative search queries) use the light model, keeping the
+        # main model's small free daily quota for answers.
+        return self.settings.llm_fast_model or self.settings.gemini_fallback_model.strip() or self.model
 
-    async def _should_retry(self, status: int, body: bytes, attempt: int) -> bool:
-        """Busy/overloaded answers ("high demand" spikes are common on the free tier) get short retries."""
-        log.warning("Gemini HTTP %s (attempt %d): %s", status, attempt + 1, body[:200].decode(errors="replace"))
+    def _models(self, model: str) -> list[str]:
+        """The requested model, then the fallback; a model whose daily quota is used up is skipped."""
+        fallback = self.settings.gemini_fallback_model.strip()
+        models = [model, fallback] if fallback and fallback != model else [model]
+        now = time.monotonic()
+        usable = [m for m in models if _exhausted.get(m, 0.0) <= now]
+        return usable or models[-1:]
+
+    async def _should_retry(self, model: str, status: int, body: bytes, attempt: int) -> bool:
+        """Busy/overloaded answers ("high demand" spikes are common on the free tier) get short retries.
+        A used-up *daily* quota is not retried: the model is set aside until Google's reset time."""
+        text = body[:400].decode(errors="replace")
+        log.warning("Gemini %s HTTP %s (attempt %d): %s", model, status, attempt + 1, text[:200])
+        if status == 429 and (until := _daily_quota_reset(body)):
+            _exhausted[model] = time.monotonic() + until
+            log.warning("Gemini %s: free daily quota used up; using the fallback model for %.1f h", model, until / 3600)
+            return False
         if status not in _RETRY_STATUSES or attempt >= _RETRIES:
             return False
         await asyncio.sleep(_RETRY_DELAYS[attempt])
@@ -155,7 +188,7 @@ class GeminiProvider(LLMProvider):
                     raise LLMError("Can't reach Gemini. Check your internet connection.", 503) from e
                 except httpx.TimeoutException as e:
                     raise LLMError("Gemini timed out. Please try again.", 504) from e
-                if r.status_code == 200 or not await self._should_retry(r.status_code, r.content, attempt):
+                if r.status_code == 200 or not await self._should_retry(m, r.status_code, r.content, attempt):
                     break
             if r.status_code == 200 or r.status_code not in _RETRY_STATUSES:
                 break
