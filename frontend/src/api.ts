@@ -1,6 +1,9 @@
 import type {
+  AnswerStage,
   Book,
   CatalogBook,
+  CatalogSourceKey,
+  CatalogSourceStatus,
   ChapterInfo,
   ChapterText,
   ChatMessage,
@@ -15,6 +18,7 @@ import type {
   KindleResult,
   Length,
   Mention,
+  NetworkInfo,
   NewNote,
   Note,
   QuestionType,
@@ -161,6 +165,8 @@ export const api = {
   translate: (chapterId: number, language: string) =>
     request<TranslationState>(`/api/chapters/${chapterId}/translation`, json("POST", { language })),
 
+  network: () => request<NetworkInfo>("/api/network"),
+
   // Reading stats
   stats: () => request<Stats>("/api/stats"),
   addReadingTime: (bookId: number, seconds: number) =>
@@ -171,9 +177,12 @@ export const api = {
     request<{ query: string; results: Source[] }>("/api/library/search", json("POST", body)),
 
   // Free books (Project Gutenberg)
-  catalogSearch: (q: string, page = 1) =>
-    request<{ results: CatalogBook[]; has_more: boolean }>(`/api/catalog/search${qs({ q: q || null, page })}`),
-  catalogImport: (gutenbergId: number) => request<Book>("/api/catalog/import", json("POST", { gutenberg_id: gutenbergId })),
+  catalogSearch: (q: string, page = 1, source: CatalogSourceKey | null = null) =>
+    request<{ results: CatalogBook[]; has_more: boolean; sources: CatalogSourceStatus[] }>(
+      `/api/catalog/search${qs({ q: q || null, page, sources: source })}`,
+    ),
+  catalogImport: (b: CatalogBook) =>
+    request<Book>("/api/catalog/import", json("POST", { source: b.source, id: b.id, title: b.title, author: b.author })),
 
   // Reading progress
   saveReading: (bookId: number, body: { position: number; offset: number; reached: boolean }) =>
@@ -210,7 +219,9 @@ export function watchProgress(
 
 export interface ChatHandlers {
   onConversation?: (id: number, userMessageId: number) => void;
-  onStage?: (stage: "searching" | "answering") => void;
+  onStage?: (stage: AnswerStage) => void;
+  /** The server is replacing a "the book doesn't say" answer after searching again: clear it. */
+  onReset?: () => void;
   onSources?: (sources: Source[], query: string) => void;
   onDelta?: (text: string) => void;
   onDone?: (messageId: number, cited: number[]) => void;
@@ -293,6 +304,7 @@ async function streamAnswer(url: string, body: unknown, h: ChatHandlers, signal?
         const d = JSON.parse(data);
         if (event === "conversation") h.onConversation?.(d.id, d.user_message_id);
         else if (event === "status") h.onStage?.(d.stage);
+        else if (event === "reset") h.onReset?.();
         else if (event === "sources") h.onSources?.(d.sources, d.query);
         else if (event === "delta") h.onDelta?.(d.text);
         else if (event === "done") h.onDone?.(d.message_id, d.cited);

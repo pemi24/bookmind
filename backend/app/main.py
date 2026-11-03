@@ -20,6 +20,7 @@ from app.db.models import AppMeta, Book
 from app.db.session import SessionLocal
 from app.features.jobs import fail_interrupted_jobs
 from app.ingestion.parsers.pdf import tesseract_available
+from app import network
 from app.llm.client import LLMError, provider, provider_status
 from app.llm.providers import ProviderStatus
 from app.retrieval.embeddings import get_embedder
@@ -157,6 +158,26 @@ async def health():
         "embeddings": {"model": s.embedding_model, "dim": s.embedding_dim, "loaded": state["models_ready"],
                        "error": state.get("models_error")},
         "ocr": {"tesseract": tesseract_available()},
+    }
+
+
+@app.get("/api/network")
+async def network_info(request: Request):
+    """Addresses to open BookMind from a phone or another device on the same Wi-Fi, with QR codes."""
+    s = get_settings()
+    lan = network.reachable_from_network(s.host)
+    built = (_DIST / "index.html").is_file()
+    urls = [f"http://{ip}:{s.port}" for ip in network.lan_addresses()]
+    # Already opened from another device? Then the address in use is the one to share.
+    host = request.url.hostname or ""
+    if lan and host and host not in ("localhost", "127.0.0.1", "::1"):
+        current = f"http://{host}:{request.url.port or s.port}"
+        urls = [current, *[u for u in urls if u != current]]
+    return {
+        "lan_mode": lan,
+        "app_built": built,
+        "port": s.port,
+        "addresses": [{"url": u, "qr_svg": network.qr_svg(u)} for u in urls[:3]],
     }
 
 

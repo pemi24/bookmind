@@ -139,3 +139,67 @@ async def test_library_essay_translation_stats(test_db, fake_llm):  # noqa: F811
             assert st["streak_days"] >= 1 and len(st["daily"]) == 30
         finally:
             await c.delete(f"/api/books/{book_id}")
+
+
+async def test_chat_searches_again_before_saying_not_found(test_db, fake_llm, monkeypatch):  # noqa: F811
+    import json
+
+    from app.llm import client
+    from app.llm.prompts import query as qp
+    from app.main import app
+
+    calls = {"stream": 0, "expand": 0}
+
+    async def stream_text(system, messages, **kw):
+        calls["stream"] += 1
+        assert '"The Lighthouse Keeper"' in system  # the book overview is in the prompt
+        if calls["stream"] == 1:
+            yield "The provided passages do not state that."
+        else:
+            yield "The diaries tell of smugglers [1]."
+
+    real_json = client.complete_json
+
+    async def complete_json(system, user, schema, **kw):
+        if schema is qp.ExpandOut:
+            calls["expand"] += 1
+            return qp.ExpandOut(queries=["smugglers French brandy", "grandfather diaries cellar"])
+        return await real_json(system, user, schema, **kw)
+
+    monkeypatch.setattr(client, "stream_text", stream_text)
+    monkeypatch.setattr(client, "complete_json", complete_json)
+
+    # The test book has only a few passages; let the first search miss most of them, as a real one can.
+    from app.api import chat as chat_api
+
+    real_search = chat_api.search_book
+    searches = {"n": 0}
+
+    async def search_book(*a, **kw):
+        searches["n"] += 1
+        found = await real_search(*a, **kw)
+        return found[:1] if searches["n"] == 1 else found
+
+    monkeypatch.setattr(chat_api, "search_book", search_book)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+        r = await c.post("/api/books", files={"file": ("sa.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
+        book_id = r.json()["id"]
+        try:
+            assert (await _wait_ready(c, book_id))["status"] == "ready"
+            resp = await c.post(f"/api/books/{book_id}/chat", json={"message": "Who used the lighthouse?"})
+            events, ev = [], None
+            for line in resp.text.splitlines():
+                if line.startswith("event: "):
+                    ev = line[7:]
+                elif line.startswith("data: "):
+                    events.append((ev, json.loads(line[6:])))
+            kinds = [e for e, _ in events]
+            assert "reset" in kinds and kinds.count("sources") == 2 and calls == {"stream": 2, "expand": 1}
+            assert ("status", {"stage": "searching_more"}) in events
+            done = next(d for e, d in events if e == "done")
+            assert done["cited"] == [1]
+            conv = next(d for e, d in events if e == "conversation")
+            saved = (await c.get(f"/api/conversations/{conv['id']}")).json()["messages"]
+            assert saved[-1]["content"] == "The diaries tell of smugglers [1]."  # the replaced answer is what's kept
+        finally:
+            await c.delete(f"/api/books/{book_id}")

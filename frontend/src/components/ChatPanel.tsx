@@ -26,7 +26,9 @@ function plainText(markdown: string): string {
   return markdown.replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, "").replace(/[*_#>`]/g, "").replace(/\s+/g, " ").trim();
 }
 
-const NOT_FOUND = /couldn.?t find|could not find|doesn.?t (?:say|mention)|does not (?:say|mention)|not (?:mentioned|covered|in the (?:book|passages))/i;
+// Mirrors the server's is_not_found(): models word "not in the book" many ways.
+const NOT_FOUND =
+  /(?:does|do|did)(?:n.?t| not) (?:say|state|mention|tell|specify|name|reveal|contain|include|provide|give|show|indicate|identify|explain)|(?:could|can)(?:n.?t| ?not) find|not (?:mentioned|stated|specified|named|given|provided|found|covered|in the (?:book|passages))|no (?:information|mention)/i;
 
 /** How many source chips SourceList would show for this answer. */
 function sourceCount(m: ChatMessage): number {
@@ -196,6 +198,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
         },
         onStage: (stage) => updateLast((m) => ({ ...m, stage })),
         onSources: (sources) => updateLast((m) => ({ ...m, sources })),
+        onReset: () => updateLast((m) => ({ ...m, content: "", cited: [] })),
         onDelta: (t) => updateLast((m) => ({ ...m, content: m.content + t })),
         onDone: (id, cited) => updateLast((m) => ({ ...m, id, cited, pending: false })),
         onError: (error) => updateLast((m) => ({ ...m, error, pending: false })),
@@ -454,14 +457,18 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
                     onCite={onCite}
                   />
                 )}
-                {m.pending && !m.content && (
-                  <div className="flex items-center gap-2 text-sm text-stone-500" aria-live="polite">
+                {m.pending && (!m.content || m.stage === "searching_more") && (
+                  <div className={`flex items-center gap-2 text-sm text-stone-500 ${m.content ? "mt-2" : ""}`} aria-live="polite">
                     <span className="flex gap-1">
                       <span className="typing-dot h-1.5 w-1.5 rounded-full bg-current" />
                       <span className="typing-dot h-1.5 w-1.5 rounded-full bg-current" />
                       <span className="typing-dot h-1.5 w-1.5 rounded-full bg-current" />
                     </span>
-                    {m.stage === "answering" ? `Reading ${m.sources.length} passages…` : "Searching the book…"}
+                    {m.stage === "searching_more"
+                      ? "Not found yet. Looking further in the book with other wordings…"
+                      : m.stage === "answering"
+                        ? `Reading ${m.sources.length} passages…`
+                        : "Searching the book…"}
                   </div>
                 )}
                 {m.error && (

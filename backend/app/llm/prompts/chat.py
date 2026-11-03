@@ -1,6 +1,7 @@
 """Prompts for grounded question answering. Tune wording here, not in the API code."""
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from app.retrieval.hybrid import Passage
@@ -17,8 +18,13 @@ STYLES = {
 # Wording tuned on a 3B local model (qwen2.5:3b): plain rules, the question right after the
 # passages, then the instruction with a concrete example and a short refusal phrase. Telling a small
 # model "if not found, say X" up front made it answer X to everything.
+# Refusals were too frequent when a passage held the answer only implicitly (e.g. "Hannah ... called
+# his name Samuel" for "who was Samuel's mother?"), so the rules allow combining and inferring from
+# the passages and giving partial answers; only a question nothing relevant speaks to is refused.
 SYSTEM = """You are BookMind, a helpful reading assistant. You answer questions about a book using the numbered passages from the book that come with each question.
-- Answer from the passages. Do not add facts that are not in them, even if you know the book.
+- Base the answer on the passages. You may combine details from several passages and draw clear conclusions from them (for example, "Hannah bare a son, and called his name Samuel" shows that Hannah is Samuel's mother).
+- Do not add facts that no passage supports, even if you know the book.
+- If the passages answer only part of the question, give that part and say what they don't show.
 - After each sentence, write the number of the passage it comes from in brackets, like [1].
 - Be concise (2-5 sentences). Markdown is fine.
 - Earlier messages only help you understand follow-up questions ("he", "next")."""
@@ -28,7 +34,12 @@ NOT_FOUND = "The book doesn't say."
 INSTRUCTION = ("Answer the question using the passages above, in 2-4 sentences. After each sentence put the "
                "number of the passage it comes from in brackets, for example: "
                "\"Alice follows the White Rabbit down a rabbit-hole [2].\" "
-               f"If the passages say nothing about the question, answer: \"{NOT_FOUND}\"")
+               f"Only if none of the passages is relevant to the question, answer: \"{NOT_FOUND}\"")
+
+OVERVIEW_RULE = """
+About the book (for questions about the book as a whole, such as what it is about or who the main \
+characters are; combine this with the passages): "{title}"{author}.
+{summary}Chapters: {chapters}"""
 
 SPOILER_RULE = """
 Spoiler guard: the reader has only read up to chapter {n} ("{title}"). The passages are limited to \
@@ -47,13 +58,27 @@ passages don't say), answer in character that you don't know. Never break charac
 say something isn't in the book."""
 
 
+def build_overview(title: str, author: str | None, chapter_titles: Sequence[str], summary: str | None = None,
+                   max_chars: int = 2500) -> str:
+    """Title, author, chapter list (and a saved book summary, if any) for whole-book questions."""
+    chapters = "; ".join(f"{i}. {t}" for i, t in enumerate(chapter_titles, start=1))
+    if len(chapters) > max_chars:
+        chapters = chapters[:max_chars].rsplit(";", 1)[0] + "; …"
+    summary_line = f"Summary: {summary.strip()[:1500]}\n" if summary else ""
+    return OVERVIEW_RULE.format(title=title, author=f" by {author}" if author else "", summary=summary_line,
+                                chapters=chapters or "(none)")
+
+
 def build_system(
     style: str = "default",
     spoiler: tuple[int, str] | None = None,
     compare: bool = False,
     persona: str | None = None,
+    overview: str | None = None,
 ) -> str:
     parts = [SYSTEM]
+    if overview:
+        parts.append(overview)
     if compare:
         parts.append(COMPARE_RULE)
     if persona:
@@ -84,8 +109,30 @@ def build_user_turn(question: str, passages: Sequence[Passage]) -> str:
     return f"{format_passages(passages)}\n\nQuestion: {question}\n\n{INSTRUCTION}\n\nAnswer:"
 
 
+_NOT_FOUND = re.compile(
+    r"(?:does|do|did)(?:n't| not) (?:say|state|mention|tell|specify|name|reveal|contain|include|provide|give"
+    r"|show|indicate|identify|explain)"
+    r"|(?:could|can)(?:n't| ?not) find|not (?:mentioned|stated|specified|named|given|provided|found)"
+    r"|no (?:information|mention|passage)|nothing (?:about|on|in the)|isn't (?:mentioned|stated|given)"
+)
+
+
 def is_not_found(answer: str) -> bool:
-    """A short 'the book doesn't say' style answer (its stray [n] markers are not real citations)."""
-    a = answer.strip().lower()
-    return len(a) < 160 and any(k in a for k in ("doesn't say", "does not say", "couldn't find", "could not find",
-                                                  "not mentioned", "doesn't mention", "does not mention"))
+    """A short 'the book doesn't say' style answer (its stray [n] markers are not real citations).
+
+    Models word it many ways ("The provided passages do not state who ..."), so match the idea, not one
+    phrase, in the opening sentence. Answers that give something and then note a gap ("X is Samuel's
+    mother; the passages don't state her age, but ...") are real answers.
+    """
+    a = re.sub(r"\[[\d,\s–-]+\]", "", answer).strip().lower().replace("’", "'")
+    first = re.split(r"(?<=[.!?])\s", a, maxsplit=1)[0]
+    if len(a) >= 200 or len(first) > 140 or re.search(r";|\bbut\b|\bhowever\b|\balthough\b", first):
+        return False
+    return bool(_NOT_FOUND.search(first))
+
+
+def admits_gap(answer: str) -> bool:
+    """A refusal, or a short answer that says the passages don't show something ("However, the passages
+    do not show who ..."): worth searching again before settling for it."""
+    a = re.sub(r"\[[\d,\s–-]+\]", "", answer).lower().replace("’", "'")
+    return is_not_found(answer) or (len(a) < 500 and bool(_NOT_FOUND.search(a)))

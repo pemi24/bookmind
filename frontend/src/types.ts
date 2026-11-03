@@ -64,6 +64,9 @@ export interface Source {
   text: string;
 }
 
+/** Where a streamed answer is: searching, a second search with other wordings, or writing. */
+export type AnswerStage = "searching" | "searching_more" | "answering";
+
 export interface ChatMessage {
   id?: number;
   role: "user" | "assistant";
@@ -71,7 +74,7 @@ export interface ChatMessage {
   sources: Source[];
   cited: number[];
   pending?: boolean;
-  stage?: "searching" | "answering";
+  stage?: AnswerStage;
   error?: string;
 }
 
@@ -316,13 +319,34 @@ export interface Stats {
   flashcards: { total: number; due: number; mastered: number; reviews: number };
 }
 
+/** How to open BookMind from a phone or another device on the same network. */
+export interface NetworkInfo {
+  /** The server listens on the network (started with start.bat lan / start.sh --lan). */
+  lan_mode: boolean;
+  app_built: boolean;
+  port: number;
+  addresses: { url: string; qr_svg: string }[];
+}
+
 /** A Project Gutenberg search result. */
+export type CatalogSourceKey = "gutenberg" | "standard" | "archive";
+
+/** A free-book search result from one of the sources. */
 export interface CatalogBook {
-  id: number;
+  source: CatalogSourceKey;
+  id: string;
   title: string;
   author: string | null;
   cover: string;
   url: string;
+}
+
+/** How each source did for a search (a busy or offline source doesn't stop the others). */
+export interface CatalogSourceStatus {
+  key: CatalogSourceKey;
+  name: string;
+  count: number;
+  error: string | null;
 }
 
 export interface KindleResult {

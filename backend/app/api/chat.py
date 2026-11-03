@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.books import get_book_or_404
 from app.config import get_settings
-from app.db.models import Chapter, Citation, Conversation, Message
+from app.db.models import Book, Chapter, Citation, Conversation, Message
 from app.db.session import SessionLocal, get_db
+from app.features import summaries
 from app.llm import client as llm
 from app.llm.prompts import chat as chat_prompts
 from app.llm.prompts import query as query_prompts
@@ -113,6 +114,46 @@ async def _rewrite_query(history: list[dict], question: str) -> str:
         return question
 
 
+async def _overview(db: AsyncSession, book: Book, max_chapter: int | None) -> str:
+    """Title, author, chapters (within the spoiler limit) and a saved whole-book summary, if one exists."""
+    stmt = select(Chapter.title).where(Chapter.book_id == book.id).order_by(Chapter.position)
+    if max_chapter is not None:
+        stmt = stmt.where(Chapter.position <= max_chapter)
+    titles = list((await db.execute(stmt)).scalars())
+    summary = None
+    for length in ("short", "medium", "detailed"):
+        if hit := await summaries.cached(db, book.id, None, length, max_chapter):
+            summary = hit.content
+            break
+    # Small local models have little context to spare.
+    return chat_prompts.build_overview(book.title, book.author, titles, summary,
+                                       max_chars=800 if llm.provider().local else 2500)
+
+
+async def _search_again(book_id: int, book_title: str, question: str, max_chapter: int | None,
+                        seen: list[Passage]) -> list[Passage]:
+    """Passages found with alternative queries, new ones first; [] if nothing new turned up."""
+    try:
+        out = await llm.complete_json(query_prompts.EXPAND_SYSTEM, query_prompts.build_expand(question, book_title),
+                                      query_prompts.ExpandOut, model=llm.provider().fast_model, max_tokens=400)
+    except llm.LLMError as e:
+        log.warning("Second search skipped: %s", e.message)
+        return []
+    queries = [q.strip() for q in out.queries if isinstance(q, str) and q.strip()][:3]
+    known = {p.chunk_id for p in seen}
+    found: dict[int, Passage] = {}
+    async with SessionLocal() as sdb:
+        for q in queries:
+            for p in await search_book(sdb, q, book_id, max_chapter=max_chapter, top_k=6):
+                if p.chunk_id not in known:
+                    found.setdefault(p.chunk_id, p)
+    if not found:
+        return []
+    k = llm.provider().default_top_k
+    new = sorted(found.values(), key=lambda p: p.score, reverse=True)[: max(k // 2, 3)]
+    return (new + seen)[:k]
+
+
 @router.post("/books/{book_id}/chat")
 async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db)):
     book = await get_book_or_404(db, book_id)
@@ -158,6 +199,8 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
         await db.flush()
 
     history = await _history(db, conv.id)
+    book_title = book.title
+    overview = None if compare_ids else await _overview(db, book, req.spoiler_chapter)
     meta = {"style": req.style, "spoiler_chapter": req.spoiler_chapter, "persona": req.persona,
             "compare_book_ids": compare_ids}
     user_msg = Message(conversation_id=conv.id, role="user", content=req.message, meta=meta)
@@ -181,11 +224,28 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
             yield sse("sources", {"query": query, "sources": sources})
 
             yield sse("status", {"stage": "answering"})
-            system = chat_prompts.build_system(req.style, spoiler, bool(compare_ids), req.persona)
+            system = chat_prompts.build_system(req.style, spoiler, bool(compare_ids), req.persona, overview)
             messages = [*history, {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages)}]
             async for delta in llm.stream_text(system, messages):
                 answer += delta
                 yield sse("delta", {"text": delta})
+
+            # Second chance before "the book doesn't say": search again with other wordings
+            # (other names, the book's own vocabulary) and answer from what that finds.
+            if chat_prompts.admits_gap(answer) and not compare_ids:
+                yield sse("status", {"stage": "searching_more"})
+                more = await _search_again(book_id, book_title, req.message, req.spoiler_chapter, passages)
+                if more:
+                    passages = more
+                    sources = [source_dict(i, p) for i, p in enumerate(passages, start=1)]
+                    yield sse("reset", {})
+                    yield sse("sources", {"query": query, "sources": sources})
+                    yield sse("status", {"stage": "answering"})
+                    messages[-1] = {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages)}
+                    answer = ""
+                    async for delta in llm.stream_text(system, messages):
+                        answer += delta
+                        yield sse("delta", {"text": delta})
 
             # A short "the book doesn't say" answer cites nothing, even if the model tacked on a [n].
             used = [] if chat_prompts.is_not_found(answer) else cited_markers(answer, len(passages))

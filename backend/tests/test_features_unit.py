@@ -184,12 +184,82 @@ def test_gutenberg_catalog_parsing():
 
     res = parse_search(OPDS_SEARCH)
     assert res["has_more"] is True
-    assert [(r["id"], r["title"], r["author"]) for r in res["results"]] == [
-        (132, "The Art of War", "Sunzi"), (1946, "On War", "Carl von Clausewitz")]
+    assert [(r["source"], r["id"], r["title"], r["author"]) for r in res["results"]] == [
+        ("gutenberg", "132", "The Art of War", "Sunzi"), ("gutenberg", "1946", "On War", "Carl von Clausewitz")]
     assert res["results"][0]["cover"].endswith("/cache/epub/132/pg132.cover.medium.jpg")
     assert parse_book(OPDS_BOOK) == {"title": "Alice's Adventures in Wonderland", "author": "Lewis Carroll"}
     with pytest.raises(CatalogError):
         parse_search("<html>Service unavailable</html")
+
+
+SE_SEARCH = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<entry><id>https://standardebooks.org/ebooks/bram-stoker/dracula</id><title>Dracula</title>
+<author><name>Bram Stoker</name></author>
+<link href="https://standardebooks.org/ebooks/bram-stoker/dracula/downloads/cover-thumbnail.jpg" rel="http://opds-spec.org/image/thumbnail"/>
+</entry>
+<entry><id>https://example.com/not-a-book</id><title>Spam</title></entry>
+</feed>"""
+
+
+def test_more_free_book_sources():
+    from app.features.catalog import (CatalogError, archive_files, catalog_name, download_prefix,
+                                      parse_archive_search, parse_standard_search, standard_epub_url)
+
+    se = parse_standard_search(SE_SEARCH)["results"]
+    assert [(r["source"], r["id"], r["title"], r["author"]) for r in se] == [
+        ("standard", "bram-stoker/dracula", "Dracula", "Bram Stoker")]
+    assert standard_epub_url("bram-stoker/dracula").startswith(
+        "https://standardebooks.org/ebooks/bram-stoker/dracula/downloads/bram-stoker_dracula.epub")
+
+    ia = parse_archive_search({"response": {"numFound": 3, "docs": [
+        {"identifier": "dracula00stok", "title": "Dracula", "creator": "Stoker, Bram, 1847-1912", "year": "1899"},
+        {"identifier": "dracu00stok", "title": "Dracula", "creator": ["Stoker, Bram, 1847-1912"]},  # another scan
+        {"identifier": "bad id!", "title": "x"},
+    ]}})
+    assert [(r["id"], r["title"], r["author"]) for r in ia["results"]] == [("dracula00stok", "Dracula (1899)", "Bram Stoker")]
+
+    free = {"metadata": {"possible-copyright-status": "NOT_IN_COPYRIGHT", "collection": ["americana"]},
+            "files": [{"name": "x_djvu.txt", "format": "DjVuTXT"}, {"name": "x.epub", "format": "EPUB"},
+                      {"name": "y.epub", "format": "EPUB", "private": "true"}]}
+    assert archive_files("x", free) == [("https://archive.org/download/x/x.epub", ".epub"),
+                                        ("https://archive.org/download/x/x_djvu.txt", ".txt")]
+    for blocked in ({"possible-copyright-status": "NOT_IN_COPYRIGHT", "collection": ["inlibrary"]},  # loan-only
+                    {"possible-copyright-status": "", "collection": "opensource"},  # uploader's own claim only
+                    {"possible-copyright-status": "NOT_IN_COPYRIGHT", "access-restricted-item": "true"}):
+        with pytest.raises(CatalogError) as e:
+            archive_files("x", {"metadata": blocked, "files": free["files"]})
+        assert e.value.status == 403
+
+    assert catalog_name("Marcus Aurelius, Emperor of Rome, 121-180") == "Marcus Aurelius"
+    assert download_prefix("gutenberg", "132") == "gutenberg-132."  # same names as books imported before
+    assert download_prefix("standard", "bram-stoker/dracula") == "standard-bram-stoker_dracula."
+
+
+async def test_catalog_search_survives_a_failing_source(monkeypatch):
+    from app.features import catalog
+
+    async def ok(query, page):
+        return {"results": [{"source": "gutenberg", "id": "1", "title": "T", "author": None, "cover": "", "url": ""}],
+                "has_more": False}
+
+    async def down(query, page):
+        raise catalog.CatalogError("Standard Ebooks is busy or down (503). Try again in a minute.", 503)
+
+    async def slow(query, page):
+        import asyncio
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(catalog, "SOURCE_TIMEOUT", 0.2)
+    monkeypatch.setattr(catalog, "SOURCES", [catalog.Source("gutenberg", "Project Gutenberg", ok, None),
+                                             catalog.Source("standard", "Standard Ebooks", down, None),
+                                             catalog.Source("archive", "Internet Archive", slow, None)])
+    monkeypatch.setattr(catalog, "BY_KEY", {s.key: s for s in catalog.SOURCES})
+    res = await catalog.search("t", 1)
+    assert [r["id"] for r in res["results"]] == ["1"]
+    status = {s["key"]: s for s in res["sources"]}
+    assert status["gutenberg"]["count"] == 1 and status["gutenberg"]["error"] is None
+    assert "busy" in status["standard"]["error"] and "too long" in status["archive"]["error"]
 
 
 def test_streaks_and_translation_batches():
@@ -207,3 +277,31 @@ def test_streaks_and_translation_batches():
     paras = ["* * *", "A" * 50, "B" * 50, "C" * 200, "12", "D" * 10]
     assert not needs_translation("* * *") and not needs_translation("12") and needs_translation("Hi there")
     assert batches(paras, budget=120) == [[1, 2], [3], [5]]
+
+
+def test_refusal_detection():
+    from app.llm.prompts.chat import admits_gap, is_not_found
+
+    refusals = ["The book doesn't say.", "The book doesn't say. [1]", "I couldn't find that in the book.",
+                "The provided passages do not state who the father of Abraham was.",
+                "The provided passages do not state who the mother of Samuel was [1, 2, 3].",
+                "The passages don’t mention his father.", "There is no information about this in the passages."]
+    answers = ["The passages state that the woman who bore Samson was the wife of Manoah [1].",
+               "Terah was the father of Abram [1].",
+               "Hannah is the mother of Samuel; the passages do not state her age, but she prayed at Shiloh [1].",
+               "Alice follows the White Rabbit down a rabbit-hole [2]. The book doesn't say why.",
+               "The book doesn't say who his father was, but it names his mother Hannah [3]."]
+    assert all(is_not_found(r) for r in refusals)
+    assert not any(is_not_found(a) for a in answers)
+    # Partial answers that admit a gap still get a second search; complete answers don't.
+    assert admits_gap("Elkanah had two wives, Hannah and Peninnah [2]. However, the passages do not show who "
+                      "the mother of Samuel was.")
+    assert not admits_gap("Terah was the father of Abram [1].")
+
+
+def test_book_overview_prompt():
+    from app.llm.prompts.chat import build_overview, build_system
+
+    ov = build_overview("Alice", "Lewis Carroll", [f"Chapter {i}" for i in range(1, 400)], "A girl falls.", max_chars=200)
+    assert '"Alice" by Lewis Carroll' in ov and "Summary: A girl falls." in ov and ov.rstrip().endswith("…")
+    assert ov in build_system(overview=ov)

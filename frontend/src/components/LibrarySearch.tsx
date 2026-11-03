@@ -1,7 +1,7 @@
 import { Quote, Search, Sparkles, Square } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { api, streamLibraryAnswer, type LibraryQuery } from "../api";
-import type { Book, PassageLoc, Source } from "../types";
+import type { AnswerStage, Book, PassageLoc, Source } from "../types";
 import { spoilerLimit } from "../utils";
 import AnswerMarkdown, { stripCitations } from "./AnswerMarkdown";
 import { Button, EmptyState, ErrorBox } from "./ui";
@@ -11,7 +11,7 @@ interface Answer {
   sources: Source[];
   cited: number[];
   pending: boolean;
-  stage: "searching" | "answering";
+  stage: AnswerStage;
   error?: string;
 }
 

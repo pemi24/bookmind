@@ -15,11 +15,15 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Features**
 * **Library** — upload several books (drag and drop), live indexing progress, re-index, delete.
-* **Find free books** — search Project Gutenberg's 70,000+ public-domain books and add one in a
-  click (downloaded straight from gutenberg.org and indexed like an upload).
+* **Find free books** — search **Project Gutenberg**, **Standard Ebooks** (carefully edited editions)
+  and **Internet Archive** at once and add a book in a click; results are labelled by source and
+  one busy site doesn't stop the others. Internet Archive results are limited to items the Archive
+  itself marks as out of copyright and not loan-only.
 * **Grounded chat** — hybrid search (pgvector + full-text, re-ranked), streamed answers whose
   sources stay tucked away until you click **Sources**; each citation opens the **reader** at the
   highlighted passage. Follow-ups, saved history, and **edit / resend / retry** for any question.
+  Before answering "the book doesn't say", BookMind searches again with other wordings (other
+  names, the book's own vocabulary) and answers from what that finds.
 * **Search your library** — passages from every book at once, or one answer drawn from all of them.
 * **Answer styles** — normal, ELI5, student, expert, analogy.
 * **Spoiler guard** — "I've read up to chapter N", or **Follow my reading** to track the furthest
@@ -232,7 +236,8 @@ Then open http://localhost:5173 and upload `samples/alice-in-wonderland.txt`.
 BookMind still runs on your computer; the phone just opens it over your home Wi-Fi.
 
 1. Start it in LAN mode: **`start.bat lan`** (Windows) or **`./start.sh --lan`** (macOS/Linux).
-   This builds the app and prints an address such as `http://192.168.1.20:8000`.
+   This builds the app and prints an address such as `http://192.168.1.20:8000`. Inside BookMind,
+   **Use on your phone** (bottom of the sidebar) shows the same address with a QR code to scan.
 2. On the phone (same Wi-Fi), open that address.
    * **iPhone**: in Safari tap **Share → Add to Home Screen**.
    * **Android**: in Chrome tap **⋮ → Add to Home screen** (or **Install app**).
@@ -315,7 +320,9 @@ the running backend (start it first); the test book is deleted afterwards.
 | "rate-limiting" / "overloaded" messages | Cloud providers only; temporary — wait and retry. Gemini requests are retried automatically and then switch to `GEMINI_FALLBACK_MODEL` (default `gemini-flash-lite-latest`). |
 | "Google's content filter stopped this answer" | Gemini's filter occasionally blocks harmless book passages, more often with the lighter fallback model. Rephrase, retry later (when the main model isn't overloaded), or use Ollama / Anthropic. |
 | Phone can't open the LAN address | Same Wi-Fi network (not guest Wi-Fi or mobile data)? Allow Python through the firewall for private networks (Windows Security → Firewall → Allow an app). Try the other addresses `start.bat lan` prints. If `backend/.env` sets `HOST`, remove that line. |
-| "Find free books" says Project Gutenberg is busy or slow | gutenberg.org is occasionally overloaded; try again in a minute. Results are cached for an hour. |
+| "Find free books" says a library is busy or slow | That site is temporarily overloaded; the other sources still answer. Try again in a minute (results are cached for an hour). |
+| A book I want isn't in "Find free books" | These libraries only carry books that are free to share — mostly books out of copyright (in the US, published before ~1930). Newer books must be uploaded from your own copy. |
+| Answers say "the book doesn't say" although it does | BookMind already searches a second time with other wordings. Rephrase with the names the book uses (e.g. "Abram" in Genesis), ask a narrower question, or open the reader's search. For whole-book questions, generating a whole-book summary (Summaries tab) gives the AI an overview to work from. |
 | Kindle import: "No Kindle highlights found" | Choose `My Clippings.txt` from the Kindle's `documents` folder (connect it by USB). Highlights from a different edition still import; they just may not show inside the reader text. |
 | Translation is slow (Ollama) | Each chapter is translated paragraph by paragraph by your AI model; on a CPU-only laptop a long chapter can take many minutes. It's saved once done. A cloud provider is much faster. |
 | Scanned PDF warning | Install Tesseract (Windows: https://github.com/UB-Mannheim/tesseract/wiki, macOS: `brew install tesseract`, Linux: `apt install tesseract-ocr`) and click Re-index. |

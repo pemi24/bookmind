@@ -1,7 +1,8 @@
-import { AlertTriangle, BarChart3, BookOpen, Compass, Library as LibraryIcon, Loader2, Moon, Search, Sun, Upload, X } from "lucide-react";
-import { useRef } from "react";
+import { AlertTriangle, BarChart3, BookOpen, Compass, Library as LibraryIcon, Loader2, Moon, Search, Smartphone, Sun, Upload, X } from "lucide-react";
+import { useRef, useState } from "react";
 import type { Book } from "../types";
 import { isIndexing } from "../utils";
+import PhoneAccess from "./PhoneAccess";
 
 export type Page = "library" | "discover" | "search" | "stats";
 
@@ -35,6 +36,7 @@ export default function Sidebar({
   onClose?: () => void; // shown in the mobile drawer
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const [phone, setPhone] = useState(false);
   return (
     <nav className="flex h-full flex-col border-r border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
       <div className="flex items-center gap-2 px-4 py-3">
@@ -114,6 +116,15 @@ export default function Sidebar({
           </li>
         ))}
       </ul>
+      <div className="border-t border-stone-200 p-3 dark:border-stone-800">
+        <button
+          onClick={() => setPhone(true)}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-stone-600 transition hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
+        >
+          <Smartphone size={16} /> Use on your phone
+        </button>
+      </div>
+      {phone && <PhoneAccess onClose={() => setPhone(false)} />}
     </nav>
   );
 }
