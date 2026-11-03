@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Network,
   NotebookPen,
+  PenLine,
   Quote,
   RefreshCw,
   Trash2,
@@ -17,7 +18,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, watchProgress } from "./api";
 import ChatPanel from "./components/ChatPanel";
+import Discover from "./components/Discover";
 import Library from "./components/Library";
+import LibrarySearch from "./components/LibrarySearch";
+import EssayPanel from "./components/panels/EssayPanel";
 import ExplorerPanel from "./components/panels/ExplorerPanel";
 import NotesPanel from "./components/panels/NotesPanel";
 import QuotesPanel from "./components/panels/QuotesPanel";
@@ -25,12 +29,13 @@ import StudyPanel from "./components/panels/StudyPanel";
 import SummariesPanel from "./components/panels/SummariesPanel";
 import TimelinePanel from "./components/panels/TimelinePanel";
 import ReaderPanel, { type ReaderTarget } from "./components/ReaderPanel";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { type Page } from "./components/Sidebar";
+import StatsPage from "./components/StatsPage";
 import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source } from "./types";
-import { isIndexing, loadPref, savePref } from "./utils";
+import { isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
 
-/* ---------- hash router: #/  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
+/* ---------- hash router: #/  ·  #/discover|search|stats  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
 const TABS = [
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "summaries", label: "Summaries", icon: FileText },
@@ -38,17 +43,20 @@ const TABS = [
   { id: "explore", label: "Explore", icon: Network },
   { id: "timeline", label: "Timeline", icon: CalendarRange },
   { id: "quotes", label: "Quotes", icon: Quote },
+  { id: "essay", label: "Essay", icon: PenLine },
   { id: "notes", label: "Notes", icon: NotebookPen },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
 type Route =
-  | { name: "library" }
+  | { name: "page"; page: Page }
   | { name: "book"; id: number; tab: Tab; read: boolean; target: PassageLoc | null };
 
 function parseHash(): Route {
+  const page = window.location.hash.match(/^#\/(discover|search|stats)\/?$/);
+  if (page) return { name: "page", page: page[1] as Page };
   const m = window.location.hash.match(/^#\/book\/(\d+)(?:\/([a-z]+))?(?:\?(.*))?$/);
-  if (!m) return { name: "library" };
+  if (!m) return { name: "page", page: "library" };
   const seg = m[2] ?? "chat";
   const read = seg === "read";
   const tab = (TABS.some((t) => t.id === seg) ? seg : "chat") as Tab;
@@ -82,9 +90,6 @@ function useTheme() {
   };
   return { dark, toggle };
 }
-
-/** Spoiler guard setting: a chapter position, "follow" (the furthest chapter read in the reader), or null (off). */
-type Spoiler = number | "follow" | null;
 
 function SpoilerControl({
   chapters,
@@ -222,7 +227,7 @@ export default function App() {
   };
   // "Follow my reading" = nothing past the furthest chapter actually read (chapter 1 before you start).
   const furthestRead = book?.reading?.furthest ?? 1;
-  const maxChapter = spoiler === "follow" ? furthestRead : spoiler;
+  const maxChapter = book ? spoilerLimit(book, spoiler) : null;
 
   const setReading = useCallback((id: number, reading: Reading | null) => {
     setBooks((bs) => bs.map((b) => (b.id === id ? { ...b, reading } : b)));
@@ -342,7 +347,8 @@ export default function App() {
     <Sidebar
       books={books}
       selectedId={bookId}
-      onLibrary={() => navigate("#/")}
+      page={route.name === "page" ? route.page : null}
+      onNavigate={navigate}
       onSelect={(id) => navigate(`#/book/${id}`)}
       onUpload={upload}
       dark={dark}
@@ -371,6 +377,8 @@ export default function App() {
         return <QuotesPanel />;
       case "notes":
         return <NotesPanel refreshKey={notesKey} />;
+      case "essay":
+        return <EssayPanel />;
       default:
         return <ChatPanel onCite={(s: Source) => openPassage(s)} />;
     }
@@ -400,14 +408,17 @@ export default function App() {
             </button>
           </div>
         )}
-        {route.name === "library" && (
+        {route.name === "page" && (
           <>
             <div className="flex items-center gap-2 border-b border-stone-200 px-2 py-1.5 md:hidden dark:border-stone-800">
               {menuButton}
               <span className="font-semibold">BookMind</span>
             </div>
             <div className="min-h-0 flex-1">
-              {loaded && (
+              {route.page === "discover" && <Discover books={books} onAdded={(b) => setBooks((bs) => [b, ...bs])} />}
+              {route.page === "search" && <LibrarySearch books={books} onOpenPassage={openPassage} />}
+              {route.page === "stats" && <StatsPage onOpenBook={(id) => navigate(`#/book/${id}`)} />}
+              {route.page === "library" && loaded && (
                 <Library
                   books={books}
                   onUpload={upload}

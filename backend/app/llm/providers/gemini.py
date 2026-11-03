@@ -1,7 +1,9 @@
 """Google Gemini via the REST API (no extra SDK). Needs GEMINI_API_KEY."""
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -13,6 +15,11 @@ from app.llm.errors import LLMError
 from app.llm.providers.base import TRUNCATED_NOTE, LLMProvider, ProviderStatus
 
 API = "https://generativelanguage.googleapis.com/v1beta"
+log = logging.getLogger(__name__)
+# Short retries for "busy" answers before giving up (the free tier often has brief demand spikes).
+_RETRY_STATUSES = (429, 500, 502, 503, 504)
+_RETRY_DELAYS = (2.0, 5.0)
+_RETRIES = len(_RETRY_DELAYS)
 
 
 class GeminiProvider(LLMProvider):
@@ -79,28 +86,57 @@ class GeminiProvider(LLMProvider):
             # Thinking models count reasoning tokens against this limit, so keep it generous.
             "generationConfig": {"maxOutputTokens": max(max_tokens, 8192), "temperature": self.settings.llm_temperature},
         }
+        failure: tuple[int, bytes] = (503, b"")
         try:
-            async with self._client.stream("POST", f"/models/{model}:streamGenerateContent", params={"alt": "sse"},
-                                           json=body) as r:
-                if r.status_code != 200:
-                    raise self._error(r.status_code, await r.aread())
-                async for line in r.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    d = json.loads(line[5:])
-                    cand = (d.get("candidates") or [{}])[0]
-                    for part in (cand.get("content") or {}).get("parts", []):
-                        if part.get("text") and not part.get("thought"):
-                            yield part["text"]
-                    reason = cand.get("finishReason")
-                    if reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
-                        raise LLMError("Gemini declined to answer this request.", 422)
-                    if reason == "MAX_TOKENS":
-                        yield TRUNCATED_NOTE
+            for m in self._models(model):
+                for attempt in range(_RETRIES + 1):
+                    async with self._client.stream("POST", f"/models/{m}:streamGenerateContent",
+                                                   params={"alt": "sse"}, json=body) as r:
+                        if r.status_code == 200:
+                            async for chunk in self._read_stream(r):
+                                yield chunk
+                            return
+                        failure = (r.status_code, await r.aread())
+                    if not await self._should_retry(*failure, attempt):
+                        break  # nothing was shown yet, so retrying can't duplicate text
+                if failure[0] not in _RETRY_STATUSES:
+                    break  # a bad request or key won't work on another model either
         except httpx.ConnectError as e:
             raise LLMError("Can't reach Gemini. Check your internet connection.", 503) from e
         except httpx.TimeoutException as e:
             raise LLMError("Gemini timed out. Please try again.", 504) from e
+        raise self._error(*failure)
+
+    def _models(self, model: str) -> list[str]:
+        """The requested model, then the fallback for when it stays overloaded."""
+        fallback = self.settings.gemini_fallback_model.strip()
+        return [model, fallback] if fallback and fallback != model else [model]
+
+    async def _should_retry(self, status: int, body: bytes, attempt: int) -> bool:
+        """Busy/overloaded answers ("high demand" spikes are common on the free tier) get short retries."""
+        log.warning("Gemini HTTP %s (attempt %d): %s", status, attempt + 1, body[:200].decode(errors="replace"))
+        if status not in _RETRY_STATUSES or attempt >= _RETRIES:
+            return False
+        await asyncio.sleep(_RETRY_DELAYS[attempt])
+        return True
+
+    @staticmethod
+    async def _read_stream(r: httpx.Response) -> AsyncIterator[str]:
+        async for line in r.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            d = json.loads(line[5:])
+            cand = (d.get("candidates") or [{}])[0]
+            for part in (cand.get("content") or {}).get("parts", []):
+                if part.get("text") and not part.get("thought"):
+                    yield part["text"]
+            reason = cand.get("finishReason")
+            if reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
+                # Google's filter sometimes trips on harmless book passages (often with the lighter models).
+                raise LLMError("Google's content filter stopped this answer, which can happen even with harmless "
+                               "passages. Try rephrasing the question, or use another AI provider in backend/.env.", 422)
+            if reason == "MAX_TOKENS":
+                yield TRUNCATED_NOTE
 
     async def _json_call(self, system: str, user: str, schema: type[BaseModel], *, model: str, max_tokens: int,
                          effort: str | None) -> Any:
@@ -111,12 +147,18 @@ class GeminiProvider(LLMProvider):
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.0,
                                  "maxOutputTokens": max(max_tokens, 8192)},
         }
-        try:
-            r = await self._client.post(f"/models/{model}:generateContent", json=body)
-        except httpx.ConnectError as e:
-            raise LLMError("Can't reach Gemini. Check your internet connection.", 503) from e
-        except httpx.TimeoutException as e:
-            raise LLMError("Gemini timed out. Please try again.", 504) from e
+        for m in self._models(model):
+            for attempt in range(_RETRIES + 1):
+                try:
+                    r = await self._client.post(f"/models/{m}:generateContent", json=body)
+                except httpx.ConnectError as e:
+                    raise LLMError("Can't reach Gemini. Check your internet connection.", 503) from e
+                except httpx.TimeoutException as e:
+                    raise LLMError("Gemini timed out. Please try again.", 504) from e
+                if r.status_code == 200 or not await self._should_retry(r.status_code, r.content, attempt):
+                    break
+            if r.status_code == 200 or r.status_code not in _RETRY_STATUSES:
+                break
         if r.status_code != 200:
             raise self._error(r.status_code, r.content)
         cand = (r.json().get("candidates") or [{}])[0]

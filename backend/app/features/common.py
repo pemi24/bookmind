@@ -124,6 +124,41 @@ def find_verbatim(haystack: str, needle: str) -> tuple[int, int] | None:
     return hay_idx[pos], hay_idx[pos + len(ndl_n) - 1] + 1
 
 
+class TextIndex:
+    """A text normalized once (like find_verbatim) so many snippets can be located in it cheaply."""
+
+    def __init__(self, text: str) -> None:
+        self.norm, self._idx = _normalize_with_map(text)
+
+    @staticmethod
+    def prepare(needle: str) -> str:
+        return _normalize_with_map(needle.strip().strip('"“”').strip())[0].strip()
+
+    def find(self, needle_norm: str, start: int = 0) -> tuple[int, int] | None:
+        """Locate an already-prepared needle; returns ORIGINAL-text offsets."""
+        if len(needle_norm) < 3:
+            return None
+        pos = self.norm.find(needle_norm, start)
+        if pos < 0:
+            return None
+        return self._idx[pos], self._idx[pos + len(needle_norm) - 1] + 1
+
+    def find_span(self, needle_norm: str) -> tuple[int, int] | None:
+        """Exact match, else anchor on the first and last few words (editions differ slightly)."""
+        hit = self.find(needle_norm)
+        if hit or needle_norm.count(" ") < 12:
+            return hit
+        words = needle_norm.split(" ")
+        head, tail = " ".join(words[:6]), " ".join(words[-6:])
+        pos = self.norm.find(head)
+        while pos >= 0:
+            end = self.norm.find(tail, pos + len(head))
+            if 0 <= end <= pos + int(len(needle_norm) * 1.3) + 80:
+                return self._idx[pos], self._idx[end + len(tail) - 1] + 1
+            pos = self.norm.find(head, pos + 1)
+        return None
+
+
 def chunk_for_offset(chunks: list[Chunk], chapter_id: int, offset: int) -> Chunk | None:
     for c in chunks:
         if c.chapter_id == chapter_id and c.char_start <= offset < c.char_end:

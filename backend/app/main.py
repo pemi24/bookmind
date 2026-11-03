@@ -4,15 +4,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import psycopg
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
-from app.api import books, chat, features, notes, study
+from app.api import books, catalog, chat, features, library, notes, stats, study
 from app.config import get_settings
 from app.db.models import AppMeta, Book
 from app.db.session import SessionLocal
@@ -111,7 +113,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for module in (books, chat, features, study, notes):
+for module in (books, chat, features, study, notes, catalog, library, stats):
     app.include_router(module.router)
 
 
@@ -156,3 +158,23 @@ async def health():
                        "error": state.get("models_error")},
         "ocr": {"tesseract": tesseract_available()},
     }
+
+
+# ---------------------------------------------------------------- built web app (phone / LAN mode)
+# After `npm run build`, the backend also serves the app itself, so one address works everywhere
+# (start.bat lan / ./start.sh --lan). In normal development Vite serves the app instead.
+_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+if (_DIST / "index.html").is_file():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def web_app(path: str):
+        if path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not found."})
+        file = (_DIST / path).resolve()
+        if path and file.is_file() and file.is_relative_to(_DIST):
+            # The service worker must always be re-checked, or app updates would never arrive.
+            headers = {"Cache-Control": "no-cache"} if file.name in ("sw.js", "manifest.webmanifest") else None
+            return FileResponse(file, headers=headers)
+        return FileResponse(_DIST / "index.html", headers={"Cache-Control": "no-cache"})

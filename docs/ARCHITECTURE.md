@@ -117,3 +117,18 @@ pulled, key present); it runs at startup, in `/api/health`, and in `scripts/chec
 
 To add a provider: subclass `LLMProvider` in `app/llm/providers/`, implement `stream_chat`,
 `_json_call` and `check`, and register it in `providers/__init__.py`.
+
+## Reading, library and export features
+
+| Feature | Code | Notes |
+|---|---|---|
+| Highlights & reading progress | `api/notes.py`, `api/books.py` (`/reading`), migration 0003 | Highlights are notes with a `location` (chapter + char range), `color` and `comment`. Progress stores chapter **positions** (they survive re-indexing). |
+| Resend / edit a question | `api/chat.py` (`resend_from`) | Deletes that user message and everything after it, so the old turn never reaches the follow-up history. |
+| Search the whole library | `api/library.py` | `search_books` per ready book with each book's spoiler limit, merged by re-ranker score; `/ask` streams one answer from the top passages. |
+| Find free books | `features/catalog.py`, `api/catalog.py` | Project Gutenberg's official OPDS feed (search) and per-id download links (EPUB, else plain text), restricted to gutenberg.org hosts; cached 1 h, one retry when busy. |
+| Kindle import | `features/kindle.py` | Parses `My Clippings.txt` (any Kindle language), attaches typed notes to their highlight by location, locates each highlight in the text with `TextIndex` (normalise once, exact match, else anchor on first/last words). Re-importing skips duplicates. |
+| Anki export | `features/study.py` (`to_anki`) | Anki's plain-text import format with header lines (`#separator:tab`, `#html:true`, `#deck:…`, `#tags column:3`). |
+| Essay helper | `features/essay.py`, `llm/prompts/essay.py` | Thesis → outline via `complete_json`; every quote is verified with `find_verbatim` and replaced by the book's own text, unverifiable ones dropped. |
+| Side-by-side translation | `features/translate.py`, table `translations` (migration 0004) | Background job per (chapter, language); paragraphs (`text.split("\n\n")`, the reader's split) are translated in numbered batches and stored aligned; missing ones are retried singly, else kept in the original. |
+| Reading stats | `features/stats.py`, table `activity_days` | The reader reports active reading time in 15 s ticks (visible page, input in the last 2 min); flashcard reviews are counted per day. Streak = consecutive days with ≥1 min of reading or any review. |
+| Install on a phone | `frontend/public/` (manifest, `sw.js`, icons), `main.py` (serves `frontend/dist`) | `start.bat lan` / `./start.sh --lan` build the app and bind to `0.0.0.0`; the backend serves the built app with an SPA fallback. The service worker caches only the app shell, never `/api`. |

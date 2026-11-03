@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from app.features.analysis import EntityMerger
 from app.features.common import find_verbatim, normalize_name, split_text
 from app.features.notes import to_markdown, to_pdf
@@ -93,3 +95,115 @@ def test_exports():
     assert "> “Curiouser and curiouser!”\n\nAlice is changing." in md
     pdf = to_pdf(book, [_note(), _note(kind="passage", comment="Alice is changing.")])
     assert pdf.startswith(b"%PDF") and len(pdf) > 500
+
+
+def test_anki_export():
+    from app.features.study import to_anki
+
+    book = SimpleNamespace(title="Alice: Wonderland")
+    ch = SimpleNamespace(title="Down the Rabbit-Hole", position=1)
+    cards = [(SimpleNamespace(front="Who is late?", back="The White\tRabbit\n<watch>"), ch),
+             (SimpleNamespace(front="Loose card", back="No chapter"), None)]
+    out = to_anki(book, cards)
+    lines = out.splitlines()
+    assert lines[:5] == ["#separator:tab", "#html:true", "#notetype:Basic", "#deck:BookMind::Alice Wonderland",
+                         "#tags column:3"]
+    front, back, tags = lines[5].split("\t")
+    assert front == "Who is late?" and "The White Rabbit<br>&lt;watch&gt;" in back and "Down the Rabbit-Hole" in back
+    assert tags == "bookmind alice_wonderland ch01"
+    assert lines[6].split("\t")[2] == "bookmind alice_wonderland" and len(lines) == 7
+
+
+CLIPPINGS = """﻿The Lighthouse Keeper: A Novel (Test Author)
+- Your Highlight on page 3 | Location 40-42 | Added on Monday, 1 January 2024 10:00:00
+
+In the morning Mara found a small brass key lying in the sand
+==========
+The Lighthouse Keeper: A Novel (Test Author)
+- Your Note on page 3 | Location 42 | Added on Monday, 1 January 2024 10:01:00
+
+Where does the key come from?
+==========
+The Lighthouse Keeper: A Novel (Test Author)
+- Your Bookmark on page 5 | Location 60 | Added on Monday, 1 January 2024 10:02:00
+
+
+==========
+﻿L'Art de la guerre (Sun Tzu)
+- Votre surlignement sur la page 12 | emplacement 180-182 | Ajouté le lundi 1 janvier 2024
+
+Tout l'art de la guerre est fondé sur la duperie.
+==========
+"""
+
+
+def test_parse_kindle_clippings():
+    from app.features.kindle import parse_clippings, summarize, title_score
+
+    clips = parse_clippings(CLIPPINGS.replace("\n", "\r\n"))  # Kindles write Windows line endings
+    assert [(c.kind, c.loc_start, c.loc_end) for c in clips] == [("highlight", 40, 42), ("note", 42, 42), ("highlight", 180, 182)]
+    assert clips[0].title == "The Lighthouse Keeper: A Novel" and clips[0].author == "Test Author" and clips[0].page == 3
+    assert clips[2].title == "L'Art de la guerre" and clips[2].text.startswith("Tout l'art")
+    rows = summarize(clips, "The Lighthouse Keeper")
+    assert rows[0]["title"] == "The Lighthouse Keeper: A Novel" and rows[0]["highlights"] == 1 and rows[0]["notes"] == 1
+    assert rows[0]["match"] >= 0.9 > title_score("The Lighthouse Keeper", "L'Art de la guerre")
+
+
+def test_text_index_find_span():
+    from app.features.common import TextIndex
+
+    text = "Intro.\n\nIt was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief."
+    idx = TextIndex(text)
+    exact = idx.find_span(TextIndex.prepare("IT WAS the best  of times"))
+    assert text[exact[0]:exact[1]] == "It was the best of times"
+    # A different edition: same opening and closing words, one word changed in the middle.
+    variant = "It was the best of times, it was the worst of times, it was the era of wisdom, it was the age of foolishness, it was the epoch of belief."
+    span = idx.find_span(TextIndex.prepare(variant))
+    assert span and text[span[0]:span[1]].endswith("epoch of belief.") and text[span[0]:].startswith("It was the best")
+    assert idx.find_span(TextIndex.prepare("nothing like this text at all, not one word of it matches here ok")) is None
+
+
+OPDS_SEARCH = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<link rel="next" href="/ebooks/search.opds/?query=war&amp;start_index=26"/>
+<entry><id>https://www.gutenberg.org/ebooks/authors/search.opds/?query=war</id><title>Authors</title></entry>
+<entry><id>https://www.gutenberg.org/ebooks/132.opds</id><title>The Art of War</title>
+<content type="text">active 6th century B.C. Sunzi</content></entry>
+<entry><id>https://www.gutenberg.org/ebooks/1946.opds</id><title>On War</title>
+<content type="text">Carl von Clausewitz</content></entry>
+</feed>"""
+
+OPDS_BOOK = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>ignored</title>
+<entry><title>Alice's Adventures in Wonderland</title><author><name>Carroll, Lewis, 1832-1898</name></author></entry>
+</feed>"""
+
+
+def test_gutenberg_catalog_parsing():
+    from app.features.catalog import CatalogError, parse_book, parse_search
+
+    res = parse_search(OPDS_SEARCH)
+    assert res["has_more"] is True
+    assert [(r["id"], r["title"], r["author"]) for r in res["results"]] == [
+        (132, "The Art of War", "Sunzi"), (1946, "On War", "Carl von Clausewitz")]
+    assert res["results"][0]["cover"].endswith("/cache/epub/132/pg132.cover.medium.jpg")
+    assert parse_book(OPDS_BOOK) == {"title": "Alice's Adventures in Wonderland", "author": "Lewis Carroll"}
+    with pytest.raises(CatalogError):
+        parse_search("<html>Service unavailable</html")
+
+
+def test_streaks_and_translation_batches():
+    from datetime import date, timedelta
+
+    from app.features.stats import _best_streak, streak
+    from app.features.translate import batches, needs_translation
+
+    today = date(2026, 11, 3)
+    days = {today - timedelta(days=i) for i in (1, 2, 3, 6, 7)}
+    assert streak(days, today) == 3  # not read today yet: yesterday's streak still counts
+    assert streak(days | {today}, today) == 4 and streak({today - timedelta(days=2)}, today) == 0
+    assert _best_streak(days) == 3
+
+    paras = ["* * *", "A" * 50, "B" * 50, "C" * 200, "12", "D" * 10]
+    assert not needs_translation("* * *") and not needs_translation("12") and needs_translation("Hi there")
+    assert batches(paras, budget=120) == [[1, 2], [3], [5]]

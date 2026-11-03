@@ -52,6 +52,8 @@ class Settings(BaseSettings):
 
     # Google Gemini
     gemini_api_key: str = ""
+    # Used when the main model stays overloaded ("high demand") after retries; empty = no fallback.
+    gemini_fallback_model: str = "gemini-flash-lite-latest"
 
     # Anthropic (optional)
     anthropic_api_key: str = ""
@@ -88,6 +90,8 @@ class Settings(BaseSettings):
     # --- Uploads ---
     upload_dir: Path = BACKEND_DIR / "data" / "uploads"
     max_upload_mb: int = 200
+    # Free-book finder: Project Gutenberg (its official OPDS catalog feed and downloads).
+    catalog_url: str = "https://www.gutenberg.org"
 
     # --- Server ---
     host: str = "127.0.0.1"

@@ -1,9 +1,9 @@
-import { Check, GraduationCap, Layers, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, Download, GraduationCap, Layers, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { Flashcard, QuestionType, Quiz, QuizResult, QuizSummary } from "../../types";
 import { useWorkspace } from "../../workspace";
-import { Button, ChapterSelect, EmptyState, ErrorBox, LocationChip, PanelShell, Segmented } from "../ui";
+import { Button, buttonClasses, ChapterSelect, EmptyState, ErrorBox, LocationChip, PanelShell, Segmented } from "../ui";
 
 const TYPE_LABELS: Record<QuestionType, string> = {
   multiple_choice: "Multiple choice",
@@ -364,6 +364,15 @@ function Flashcards() {
           <p className="text-2xl font-bold">{deck?.due ?? 0} <span className="text-sm font-normal text-stone-500">due now</span></p>
           <p className="text-xs text-stone-500">{deck?.total ?? 0} cards in this book's deck</p>
         </div>
+        <a
+          href={api.exportCardsUrl(book.id, maxChapter)}
+          download
+          aria-disabled={!deck?.total}
+          className={`${buttonClasses("secondary")} ${deck?.total ? "" : "pointer-events-none opacity-40"}`}
+          title="Download a file to import into Anki (File → Import). Cards keep their chapter as a tag."
+        >
+          <Download size={14} /> Export to Anki
+        </a>
         <Button variant="primary" onClick={startReview} disabled={!deck?.due}>
           Review due cards
         </Button>

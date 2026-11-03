@@ -1,3 +1,5 @@
+import type { Book } from "./types";
+
 export function formatDate(iso: string | null): string {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -75,4 +77,12 @@ export function findLoose(haystack: string, needle: string, near = 0): [number, 
   }
   if (best === -1) return null;
   return [h.map[best], h.map[best + n.length - 1] + 1];
+}
+
+/** Spoiler guard setting saved per book: a chapter position, "follow" (furthest chapter read), or null (off). */
+export type Spoiler = number | "follow" | null;
+
+/** The chapter limit the spoiler guard applies to a book (null = no limit). */
+export function spoilerLimit(book: Book, setting: Spoiler = loadPref<Spoiler>(`spoiler:${book.id}`, null)): number | null {
+  return setting === "follow" ? (book.reading?.furthest ?? 1) : setting;
 }

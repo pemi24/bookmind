@@ -5,13 +5,14 @@ book removes all derived data in one statement.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     ARRAY,
     Boolean,
     Computed,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -186,6 +188,37 @@ class Note(Base):
     color: Mapped[str | None] = mapped_column(String(20))  # reader highlight colour
     comment: Mapped[str | None] = mapped_column(Text)  # the reader's own words on a highlight
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Translation(Base):
+    """A chapter translated paragraph by paragraph, for the side-by-side reader."""
+
+    __tablename__ = "translations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = _book_fk()
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"))
+    language: Mapped[str] = mapped_column(String(40))
+    # One entry per paragraph of chapter.text (split on blank lines), aligned by index.
+    paragraphs: Mapped[list] = mapped_column(JSONB)
+    model: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("chapter_id", "language", name="uq_translations_chapter_language"),)
+
+
+class ActivityDay(Base):
+    """Per book, per day: time spent reading and flashcards reviewed (reading stats)."""
+
+    __tablename__ = "activity_days"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = _book_fk()
+    day: Mapped[date] = mapped_column(Date)
+    read_seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    cards_reviewed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    __table_args__ = (UniqueConstraint("book_id", "day", name="uq_activity_book_day"),)
 
 
 class Summary(Base):

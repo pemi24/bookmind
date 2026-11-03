@@ -252,6 +252,87 @@ export interface Note {
 
 export type HighlightColor = "yellow" | "green" | "blue" | "pink";
 
+/** A book found in a Kindle "My Clippings.txt" file; match = similarity to the open book's title (0-1). */
+export interface KindleBook {
+  title: string;
+  author: string | null;
+  highlights: number;
+  notes: number;
+  match: number;
+}
+
+export interface EssayEvidence {
+  quote: string;
+  explanation: string;
+  chunk_id: number;
+  chapter_id: number;
+  chapter_position: number;
+  chapter_title: string;
+  page: number | null;
+  char_start: number;
+  char_end: number;
+}
+
+/** Essay helper outline; every quote has been verified word for word against the book. */
+export interface Essay {
+  title: string;
+  thesis: string;
+  introduction: string;
+  sections: { heading: string; point: string; evidence: EssayEvidence[] }[];
+  counterargument: string;
+  conclusion: string;
+  dropped_quotes: number;
+}
+
+/** Side-by-side translation of one chapter. paragraphs align with chapter.text.split("\n\n"). */
+export interface TranslationState {
+  status: "done" | "running" | "failed" | "none";
+  language: string;
+  paragraphs?: string[];
+  job?: Job | null;
+}
+
+export interface Stats {
+  today_seconds: number;
+  week_seconds: number;
+  total_seconds: number;
+  streak_days: number;
+  best_streak_days: number;
+  active_days: number;
+  daily: { day: string; seconds: number; cards: number }[];
+  books: {
+    id: number;
+    title: string;
+    author: string | null;
+    seconds: number;
+    chapters: number;
+    furthest: number;
+    finished: boolean;
+    highlights: number;
+    last_read: string | null;
+  }[];
+  books_finished: number;
+  quizzes: { attempts: number; average: number | null };
+  flashcards: { total: number; due: number; mastered: number; reviews: number };
+}
+
+/** A Project Gutenberg search result. */
+export interface CatalogBook {
+  id: number;
+  title: string;
+  author: string | null;
+  cover: string;
+  url: string;
+}
+
+export interface KindleResult {
+  imported: number;
+  located: number;
+  duplicates: number;
+  notes_attached: number;
+  standalone_notes: number;
+}
+
 export type NewNote = Omit<Note, "id" | "book_id" | "created_at" | "chunk_id" | "message_id" | "title" | "color" | "comment"> & {
   title?: string | null;
   chunk_id?: number | null;

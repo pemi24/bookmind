@@ -15,25 +15,36 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Features**
 * **Library** — upload several books (drag and drop), live indexing progress, re-index, delete.
-* **Grounded chat** — hybrid search (pgvector + full-text, re-ranked), streamed answers with `[n]`
-  citations that open the **reader** at the highlighted passage; follow-ups and saved history.
+* **Find free books** — search Project Gutenberg's 70,000+ public-domain books and add one in a
+  click (downloaded straight from gutenberg.org and indexed like an upload).
+* **Grounded chat** — hybrid search (pgvector + full-text, re-ranked), streamed answers whose
+  sources stay tucked away until you click **Sources**; each citation opens the **reader** at the
+  highlighted passage. Follow-ups, saved history, and **edit / resend / retry** for any question.
+* **Search your library** — passages from every book at once, or one answer drawn from all of them.
 * **Answer styles** — normal, ELI5, student, expert, analogy.
 * **Spoiler guard** — "I've read up to chapter N", or **Follow my reading** to track the furthest
   chapter you've actually read in the reader; enforced in every database query.
 * **Talk to a character** (fiction) and **compare books** (citations from each book).
 * **Summaries** — short / medium / detailed, per chapter or whole book.
 * **Study** — generated quizzes (multiple choice, true/false, short answer) with scoring,
-  explanations and source links; flashcards with spaced repetition (SM-2).
+  explanations and source links; flashcards with spaced repetition (SM-2), **exportable to Anki**.
+* **Essay helper** — give a thesis, get an outline (sections, counter-argument, conclusion) backed
+  by quotes that are checked word for word against the book; export to Markdown or save to notes.
 * **Explore** — characters, places, terms and themes with a relationship graph (fiction) or
   concept map (non-fiction); **Timeline** of key events.
 * **Quote finder** — verbatim quotes about a topic (each verified against the text), copy/share.
 * **Notes & highlights** — save answers, quotes or reader highlights, tag them, export to
-  Markdown or PDF.
+  Markdown or PDF. **Import Kindle highlights** (and the notes you typed on them) from a Kindle's
+  `My Clippings.txt`.
 * **Reader** — full text with search, page markers and font size. Select text to highlight it
   in one of four colours and add your own note; highlights stay drawn in the text (click one to
-  edit or delete it).
+  edit or delete it). **Side-by-side translation** into any language, chapter by chapter (saved
+  once translated).
 * **Reading progress** — resumes at the paragraph where you stopped; the library shows how far
   you've got, with a "Start over" option. Jumping to a cited passage never moves your bookmark.
+* **Reading stats** — time read per day, streaks, books finished, quiz scores, flashcard progress.
+* **Install on your phone** — open BookMind from an iPhone or Android phone on the same Wi-Fi and
+  add it to the home screen (see §5).
 * Suggested starter questions, dark/light mode, responsive layout, voice input and read-aloud
   (browser speech APIs).
 
@@ -216,6 +227,22 @@ opens the browser):
 
 Then open http://localhost:5173 and upload `samples/alice-in-wonderland.txt`.
 
+### On your phone (iPhone / Android)
+
+BookMind still runs on your computer; the phone just opens it over your home Wi-Fi.
+
+1. Start it in LAN mode: **`start.bat lan`** (Windows) or **`./start.sh --lan`** (macOS/Linux).
+   This builds the app and prints an address such as `http://192.168.1.20:8000`.
+2. On the phone (same Wi-Fi), open that address.
+   * **iPhone**: in Safari tap **Share → Add to Home Screen**.
+   * **Android**: in Chrome tap **⋮ → Add to Home screen** (or **Install app**).
+3. Open BookMind from the home-screen icon; it runs full screen like an app.
+
+Notes: the first time, Windows asks whether Python may use the network — allow it for **private
+networks**. Anyone on the same Wi-Fi can open your library while LAN mode runs, so only use it on
+a network you trust. Browsers only enable offline caching (the service worker) over HTTPS or on
+the computer itself; over plain `http://` the home-screen app works but needs the computer to be on.
+
 ### Manual steps (what the scripts do)
 
 ```bash
@@ -285,7 +312,12 @@ the running backend (start it first); the test book is deleted afterwards.
 | Answers have no `[1]` citation chips | Small models sometimes forget to cite; the passages used are still shown under the answer. A larger model cites more reliably. |
 | "GEMINI_API_KEY is not set" / "ANTHROPIC_API_KEY is not set" | Only when `LLM_PROVIDER` is `gemini`/`anthropic`: add the key to `backend/.env` and restart the backend — or switch back to `LLM_PROVIDER=ollama`. |
 | "Gemini model '…' is unavailable" | Google retires older models (often for new API keys first). Set `LLM_MODEL` in `backend/.env` to a current one from https://ai.google.dev/gemini-api/docs/models and restart the backend. |
-| "rate-limiting" / "overloaded" messages | Cloud providers only; temporary — wait and retry. |
+| "rate-limiting" / "overloaded" messages | Cloud providers only; temporary — wait and retry. Gemini requests are retried automatically and then switch to `GEMINI_FALLBACK_MODEL` (default `gemini-flash-lite-latest`). |
+| "Google's content filter stopped this answer" | Gemini's filter occasionally blocks harmless book passages, more often with the lighter fallback model. Rephrase, retry later (when the main model isn't overloaded), or use Ollama / Anthropic. |
+| Phone can't open the LAN address | Same Wi-Fi network (not guest Wi-Fi or mobile data)? Allow Python through the firewall for private networks (Windows Security → Firewall → Allow an app). Try the other addresses `start.bat lan` prints. If `backend/.env` sets `HOST`, remove that line. |
+| "Find free books" says Project Gutenberg is busy or slow | gutenberg.org is occasionally overloaded; try again in a minute. Results are cached for an hour. |
+| Kindle import: "No Kindle highlights found" | Choose `My Clippings.txt` from the Kindle's `documents` folder (connect it by USB). Highlights from a different edition still import; they just may not show inside the reader text. |
+| Translation is slow (Ollama) | Each chapter is translated paragraph by paragraph by your AI model; on a CPU-only laptop a long chapter can take many minutes. It's saved once done. A cloud provider is much faster. |
 | Scanned PDF warning | Install Tesseract (Windows: https://github.com/UB-Mannheim/tesseract/wiki, macOS: `brew install tesseract`, Linux: `apt install tesseract-ocr`) and click Re-index. |
 | First start is slow | The embedding and re-ranking models (~150 MB) download once into the Hugging Face cache. |
 | Backend takes minutes to start / indexing sits at "Loading embedding model" (Windows) | Antivirus real-time scanning of the thousands of files in `backend\.venv` (PyTorch especially) can make imports 10–50× slower. Check with `python -X importtime -c "import app.main"`. If you trust the folder, add `backend\.venv` and `%USERPROFILE%\.cache\huggingface` as Windows Security → Virus & threat protection → Exclusions. |

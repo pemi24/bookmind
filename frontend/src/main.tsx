@@ -8,3 +8,11 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </StrictMode>,
 );
+
+// Installable app (phones). Browsers only allow service workers on localhost or HTTPS; on a plain
+// http:// Wi-Fi address "Add to Home Screen" still works, just without the offline app shell.
+if (import.meta.env.PROD && "serviceWorker" in navigator && window.isSecureContext) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

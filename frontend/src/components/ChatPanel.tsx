@@ -1,9 +1,9 @@
-import { BookmarkPlus, Copy, History, Mic, MicOff, Plus, SendHorizonal, Square, Trash2, Volume2, VolumeX } from "lucide-react";
+import { BookmarkPlus, Copy, History, Mic, MicOff, Pencil, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamChat } from "../api";
 import type { ChatMessage, ConversationSummary, Source, Style } from "../types";
 import { useWorkspace } from "../workspace";
-import AnswerMarkdown from "./AnswerMarkdown";
+import AnswerMarkdown, { stripCitations } from "./AnswerMarkdown";
 import { Segmented } from "./ui";
 
 const STYLES: { value: Style; label: string }[] = [
@@ -27,6 +27,12 @@ function plainText(markdown: string): string {
 }
 
 const NOT_FOUND = /couldn.?t find|could not find|doesn.?t (?:say|mention)|does not (?:say|mention)|not (?:mentioned|covered|in the (?:book|passages))/i;
+
+/** How many source chips SourceList would show for this answer. */
+function sourceCount(m: ChatMessage): number {
+  if (m.cited.length) return m.sources.filter((s) => m.cited.includes(s.marker)).length;
+  return NOT_FOUND.test(m.content) ? 0 : Math.min(m.sources.length, 3);
+}
 
 function SourceList({ sources, cited, answer, onCite }: { sources: Source[]; cited: number[]; answer: string; onCite: (s: Source) => void }) {
   // Small local models sometimes forget the [n] markers: still show what the answer was based on.
@@ -70,6 +76,8 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
   const [showHistory, setShowHistory] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState<number | null>(null);
+  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
+  const [citesShown, setCitesShown] = useState<Set<number>>(new Set()); // answers whose sources are visible
   const abortRef = useRef<AbortController | null>(null);
   const recRef = useRef<{ stop: () => void } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -84,6 +92,8 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     abortRef.current?.abort();
     setConversationId(null);
     setMessages([]);
+    setCitesShown(new Set());
+    setEditing(null);
     setMode("ask");
     setCompareIds([]);
     setPersona("");
@@ -114,6 +124,8 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     const c = await api.conversation(id);
     setConversationId(id);
     setMessages(c.messages);
+    setCitesShown(new Set());
+    setEditing(null);
     setMode(c.mode === "persona" ? "persona" : c.mode === "compare" ? "compare" : "ask");
     setPersona(c.persona ?? "");
     setCompareIds(c.book_ids.filter((b) => b !== book.id));
@@ -123,6 +135,8 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     abortRef.current?.abort();
     setConversationId(null);
     setMessages([]);
+    setCitesShown(new Set());
+    setEditing(null);
   };
 
   const changeMode = (m: Mode) => {
@@ -130,11 +144,20 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     newConversation(); // modes are per conversation
   };
 
+  const toggleCites = (i: number) =>
+    setCitesShown((s) => {
+      const next = new Set(s);
+      if (!next.delete(i)) next.add(i);
+      return next;
+    });
+
   const updateLast = (fn: (m: ChatMessage) => ChatMessage) => setMessages((ms) => [...ms.slice(0, -1), fn(ms[ms.length - 1])]);
 
-  const send = async (text: string) => {
+  /** Send a question. With `resendAt`, the user message at that index (and everything after it) is replaced. */
+  const send = async (text: string, resendAt?: number) => {
     const q = text.trim();
     if (!q || busy) return;
+    const replaced = resendAt !== undefined ? messages[resendAt] : undefined;
     if (mode === "persona" && !persona.trim()) {
       notify("Choose a character to talk to first.");
       return;
@@ -143,10 +166,12 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
       notify("Pick at least one other book to compare with.");
       return;
     }
-    setInput("");
+    if (resendAt === undefined) setInput("");
+    setEditing(null);
+    if (resendAt !== undefined) setCitesShown((s) => new Set([...s].filter((j) => j < resendAt)));
     setBusy(true);
     setMessages((ms) => [
-      ...ms,
+      ...(resendAt !== undefined ? ms.slice(0, resendAt) : ms),
       { role: "user", content: q, sources: [], cited: [] },
       { role: "assistant", content: "", sources: [], cited: [], pending: true, stage: "searching" },
     ]);
@@ -161,9 +186,14 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
         spoiler_chapter: maxChapter,
         persona: mode === "persona" ? persona.trim() : null,
         compare_book_ids: mode === "compare" ? compareIds : [],
+        // Without a saved id (e.g. the first send failed early) there is nothing to replace server-side.
+        resend_from: replaced?.id ?? null,
       },
       {
-        onConversation: (id) => setConversationId(id),
+        onConversation: (id, userMessageId) => {
+          setConversationId(id);
+          setMessages((ms) => ms.map((m, j) => (j === ms.length - 2 ? { ...m, id: userMessageId } : m)));
+        },
         onStage: (stage) => updateLast((m) => ({ ...m, stage })),
         onSources: (sources) => updateLast((m) => ({ ...m, sources })),
         onDelta: (t) => updateLast((m) => ({ ...m, content: m.content + t })),
@@ -363,15 +393,63 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
           )}
           {messages.map((m, i) =>
             m.role === "user" ? (
-              <div key={i} className="max-w-[85%] self-end rounded-2xl rounded-br-md bg-brand-600 px-4 py-2.5 text-[15px] text-white">
-                {m.content}
-              </div>
+              editing?.index === i ? (
+                <form
+                  key={i}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    send(editing.text, i);
+                  }}
+                  className="w-full max-w-[85%] self-end rounded-2xl border border-brand-400 bg-white p-2 dark:bg-stone-900"
+                >
+                  <textarea
+                    autoFocus
+                    value={editing.text}
+                    onChange={(e) => setEditing({ index: i, text: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        send(editing.text, i);
+                      }
+                      if (e.key === "Escape") setEditing(null);
+                    }}
+                    rows={2}
+                    aria-label="Edit your question"
+                    className="w-full resize-y bg-transparent px-1 text-[15px] outline-none"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setEditing(null)} className="rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800">
+                      Cancel
+                    </button>
+                    <button type="submit" disabled={!editing.text.trim() || busy} className="rounded-md bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-40">
+                      Send again
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div key={i} className="group flex max-w-[85%] flex-col items-end self-end">
+                  <div className="rounded-2xl rounded-br-md bg-brand-600 px-4 py-2.5 text-[15px] whitespace-pre-wrap text-white">{m.content}</div>
+                  <div className="mt-1 flex gap-1 opacity-0 transition group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-70">
+                    <button disabled={busy} onClick={() => setEditing({ index: i, text: m.content })} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-stone-500 hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800" title="Edit and send again">
+                      <Pencil size={12} /> Edit
+                    </button>
+                    <button disabled={busy} onClick={() => send(m.content, i)} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-stone-500 hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800" title="Send this question again">
+                      <RotateCcw size={12} /> Resend
+                    </button>
+                  </div>
+                </div>
+              )
             ) : (
               <div key={i} className="group max-w-full">
                 {m.content && (
                   <AnswerMarkdown
                     // A short "the book doesn't say" answer cites nothing, even if the model added a [n].
-                    text={m.content.length < 160 && NOT_FOUND.test(m.content) ? m.content.replace(/\s*\[[^\]]*\d[^\]]*\]/g, "") : m.content}
+                    // Citation markers stay hidden until the reader asks to see the sources.
+                    text={
+                      (m.content.length < 160 && NOT_FOUND.test(m.content)) || !citesShown.has(i)
+                        ? stripCitations(m.content)
+                        : m.content
+                    }
                     sources={m.sources}
                     onCite={onCite}
                   />
@@ -391,9 +469,26 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
                     {m.error}
                   </div>
                 )}
-                {!m.pending && m.content && <SourceList sources={m.sources} cited={m.cited} answer={m.content} onCite={onCite} />}
-                {!m.pending && m.content && (
-                  <div className="mt-2 flex gap-1 opacity-70 transition group-hover:opacity-100">
+                {!m.pending && m.content && citesShown.has(i) && <SourceList sources={m.sources} cited={m.cited} answer={m.content} onCite={onCite} />}
+                {!m.pending && (m.content || m.error) && (
+                  <div className="mt-2 flex flex-wrap gap-1 opacity-70 transition group-hover:opacity-100">
+                    {m.content && sourceCount(m) > 0 && (
+                      <button
+                        onClick={() => toggleCites(i)}
+                        aria-expanded={citesShown.has(i)}
+                        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"
+                        title={citesShown.has(i) ? "Hide sources" : "Show where this answer comes from"}
+                      >
+                        <Quote size={14} /> {citesShown.has(i) ? "Hide sources" : `Sources (${sourceCount(m)})`}
+                      </button>
+                    )}
+                    {messages[i - 1]?.role === "user" && (
+                      <button disabled={busy} onClick={() => send(messages[i - 1].content, i - 1)} className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800" title="Answer this question again">
+                        <RotateCcw size={14} /> Retry
+                      </button>
+                    )}
+                    {m.content && (
+                      <>
                     <button onClick={() => saveAnswer(i, m)} className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800" title="Save to notes">
                       <BookmarkPlus size={14} /> Save
                     </button>
@@ -404,6 +499,8 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
                       <button onClick={() => speak(i, m.content)} className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800" title={speaking === i ? "Stop reading" : "Read aloud"}>
                         {speaking === i ? <VolumeX size={14} /> : <Volume2 size={14} />} {speaking === i ? "Stop" : "Listen"}
                       </button>
+                    )}
+                      </>
                     )}
                   </div>
                 )}

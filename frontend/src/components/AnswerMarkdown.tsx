@@ -17,6 +17,11 @@ function linkifyCitations(text: string, max: number): string {
   });
 }
 
+/** Remove "[1]" / "[2, 3]" / "[Passage 1]" markers (the same forms linkifyCitations turns into chips). */
+export function stripCitations(text: string): string {
+  return text.replace(/\s?\[(?:passages?|sources?)?\s*\d+(?:\s*[,–-]\s*\d+)*\](?!\()/gi, "");
+}
+
 export default function AnswerMarkdown({
   text,
   sources,

@@ -73,6 +73,21 @@ async def fake_complete_json(system, user, schema, **kw):
         return study.CardsOut(cards=[study.CardOut(front=f"Card {i}", back="Back", passage=1) for i in range(3)])
     if schema is book.BookProfile:
         return book.BookProfile(is_fiction=True, questions=["What is in the cellar?"])
+    from app.llm.prompts import essay, translate
+
+    if schema is essay.EssayOut:
+        first = re.search(r"\[1\]\n([^.]+\.)", user).group(1)  # a real sentence from passage 1
+        Ev = essay.EvidenceOut
+        return essay.EssayOut(
+            title="Secrets", thesis="The lighthouse hides secrets.", introduction="Open with the storm.",
+            sections=[essay.SectionOut(heading="The key", point="Objects reveal the past.", evidence=[
+                Ev(passage=1, quote=first, explanation="Shows it."),
+                Ev(passage=1, quote="Mara flew to the moon on a dragon.", explanation="Invented."),  # must be dropped
+            ])],
+            counterargument="Maybe it is just a lighthouse.", conclusion="Close on the diaries.")
+    if schema is translate.TranslationOut:
+        items = re.findall(r"\[(\d+)\]\n(.+?)(?=\n\n\[\d+\]\n|\n\nTranslate each)", user, re.S)
+        return translate.TranslationOut(paragraphs=[translate.ParagraphOut(n=int(n), text=f"FR: {t}") for n, t in items])
     raise AssertionError(f"unexpected schema {schema}")
 
 
@@ -213,6 +228,19 @@ async def test_features_end_to_end(test_db, fake_llm):
         sources = next(e["sources"] for e in events if "sources" in e)
         assert sources and all(s["chapter_position"] <= 1 for s in sources)
         assert any("message_id" in e for e in events)
+
+        # --- resend: replaces the question and everything after it instead of appending
+        conv = next(e for e in events if "user_message_id" in e)
+        await c.post(f"/api/books/{book_id}/chat", json={"message": "A follow-up", "conversation_id": conv["id"]})
+        before = (await c.get(f"/api/conversations/{conv['id']}")).json()["messages"]
+        assert [m["role"] for m in before] == ["user", "assistant", "user", "assistant"]
+        await c.post(f"/api/books/{book_id}/chat", json={
+            "message": "Edited question", "conversation_id": conv["id"], "resend_from": conv["user_message_id"]})
+        after = (await c.get(f"/api/conversations/{conv['id']}")).json()["messages"]
+        assert [(m["role"], m["content"]) for m in after][0] == ("user", "Edited question") and len(after) == 2
+        bad = await c.post(f"/api/books/{book_id}/chat", json={
+            "message": "x", "conversation_id": conv["id"], "resend_from": after[1]["id"]})  # an answer, not a question
+        assert bad.status_code == 404
 
         # --- cascade: deleting the book removes all feature data
         assert (await c.delete(f"/api/books/{book_id}")).status_code == 204

@@ -1,18 +1,20 @@
 """Study mode endpoints: quizzes and flashcards."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.features import effective_max_chapter, require_llm
-from app.db.models import Chunk, Flashcard, Quiz
+from app.db.models import Chapter, Chunk, Flashcard, Quiz
 from app.db.session import get_db
-from app.features import study
+from app.features import stats, study
 from app.features.common import get_chapter, ready_book
 
 router = APIRouter(prefix="/api", tags=["study"])
@@ -142,6 +144,22 @@ async def list_cards(book_id: int, due_only: bool = False, db: AsyncSession = De
     return {"total": total, "due": due, "cards": [_card(c, ch) for c, ch in rows]}
 
 
+@router.get("/books/{book_id}/flashcards/export")
+async def export_cards(book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
+    """Download the deck as an Anki import file (File → Import in Anki). Respects the spoiler limit."""
+    book = await ready_book(db, book_id)
+    stmt = (select(Flashcard, Chapter).outerjoin(Chapter, Chapter.id == Flashcard.chapter_id)
+            .where(Flashcard.book_id == book_id).order_by(Chapter.position, Flashcard.id))
+    if max_chapter is not None:
+        stmt = stmt.where(or_(Chapter.position.is_(None), Chapter.position <= max_chapter))
+    rows = (await db.execute(stmt)).all()
+    if not rows:
+        raise HTTPException(404, "No flashcards to export yet.")
+    slug = re.sub(r"[^\w]+", "-", book.title.lower()).strip("-")[:60] or "flashcards"
+    return Response(study.to_anki(book, rows), media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}-anki.txt"'})
+
+
 class ReviewRequest(BaseModel):
     grade: Literal["again", "hard", "good", "easy"]
 
@@ -152,6 +170,7 @@ async def review_card(card_id: int, req: ReviewRequest, db: AsyncSession = Depen
     if card is None:
         raise HTTPException(404, "Flashcard not found.")
     study.review(card, req.grade)
+    await stats.add_activity(db, card.book_id, cards=1)
     await db.commit()
     return _card(card)
 

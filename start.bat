@@ -1,7 +1,9 @@
 @echo off
 REM BookMind launcher (Windows): installs dependencies on first run, then starts backend + frontend.
+REM   start.bat lan   also lets phones on the same Wi-Fi open (and install) BookMind.
 setlocal
 cd /d "%~dp0"
+set MODE=%~1
 
 if not exist backend\.env (
   copy backend\.env.example backend\.env >nul
@@ -32,8 +34,22 @@ if not exist frontend\node_modules (
 REM Warn (don't stop) if the AI model isn't ready, e.g. Ollama not running or the model not pulled.
 backend\.venv\Scripts\python.exe backend\scripts\check_llm.py
 
+if /i "%MODE%"=="lan" goto lan
+
 echo Starting backend on http://127.0.0.1:8000 and frontend on http://localhost:5173 ...
 start "BookMind backend" cmd /k "cd /d %~dp0backend && .venv\Scripts\python.exe run.py"
 start "BookMind frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
 timeout /t 4 >nul
 start http://localhost:5173
+exit /b 0
+
+:lan
+REM One address for phones on the same Wi-Fi: the backend serves the built app.
+echo Building the app for phones...
+pushd frontend
+call npm run build || (popd & exit /b 1)
+popd
+backend\.venv\Scripts\python.exe backend\scripts\lan_info.py
+set HOST=0.0.0.0
+cd /d "%~dp0backend"
+.venv\Scripts\python.exe run.py

@@ -1,12 +1,22 @@
-import { AlertTriangle, BookOpen, Library as LibraryIcon, Loader2, Moon, Sun, Upload, X } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, Compass, Library as LibraryIcon, Loader2, Moon, Search, Sun, Upload, X } from "lucide-react";
 import { useRef } from "react";
 import type { Book } from "../types";
 import { isIndexing } from "../utils";
 
+export type Page = "library" | "discover" | "search" | "stats";
+
+const NAV: { page: Page; label: string; icon: typeof LibraryIcon; hash: string }[] = [
+  { page: "library", label: "Library", icon: LibraryIcon, hash: "#/" },
+  { page: "search", label: "Search library", icon: Search, hash: "#/search" },
+  { page: "discover", label: "Find free books", icon: Compass, hash: "#/discover" },
+  { page: "stats", label: "Reading stats", icon: BarChart3, hash: "#/stats" },
+];
+
 export default function Sidebar({
   books,
   selectedId,
-  onLibrary,
+  page,
+  onNavigate,
   onSelect,
   onUpload,
   dark,
@@ -15,7 +25,9 @@ export default function Sidebar({
 }: {
   books: Book[];
   selectedId: number | null;
-  onLibrary: () => void;
+  /** The top-level page shown, or null while a book is open. */
+  page: Page | null;
+  onNavigate: (hash: string) => void;
   onSelect: (id: number) => void;
   onUpload: (files: File[]) => void;
   dark: boolean;
@@ -26,7 +38,7 @@ export default function Sidebar({
   return (
     <nav className="flex h-full flex-col border-r border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
       <div className="flex items-center gap-2 px-4 py-3">
-        <button onClick={onLibrary} className="flex items-center gap-2">
+        <button onClick={() => onNavigate("#/")} className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white">
             <BookOpen size={18} />
           </span>
@@ -45,15 +57,19 @@ export default function Sidebar({
           </button>
         )}
       </div>
-      <div className="space-y-1 px-3">
-        <button
-          onClick={onLibrary}
-          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
-            selectedId === null ? "bg-stone-100 dark:bg-stone-800" : "hover:bg-stone-100 dark:hover:bg-stone-800"
-          }`}
-        >
-          <LibraryIcon size={16} /> Library
-        </button>
+      <div className="space-y-0.5 px-3">
+        {NAV.map(({ page: p, label, icon: Icon, hash }) => (
+          <button
+            key={p}
+            onClick={() => onNavigate(hash)}
+            aria-current={page === p ? "page" : undefined}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+              page === p ? "bg-stone-100 dark:bg-stone-800" : "hover:bg-stone-100 dark:hover:bg-stone-800"
+            }`}
+          >
+            <Icon size={16} /> {label}
+          </button>
+        ))}
         <button
           onClick={() => fileRef.current?.click()}
           className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-brand-700 transition hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-900/30"

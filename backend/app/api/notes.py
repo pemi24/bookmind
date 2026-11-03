@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.books import get_book_or_404
 from app.db.models import Note
 from app.db.session import get_db
+from app.features import kindle
 from app.features import notes as export
 
 router = APIRouter(prefix="/api", tags=["notes"])
@@ -81,6 +82,38 @@ async def list_notes(book_id: int, tag: str | None = None, db: AsyncSession = De
     notes = await _notes(db, book_id, tag)
     all_tags = sorted({t for n in await _notes(db, book_id, None) for t in (n.tags or [])})
     return {"notes": [note_dict(n) for n in notes], "tags": all_tags}
+
+
+_CLIPPINGS_MAX_BYTES = 20 * 1024 * 1024
+
+
+async def _read_clippings(file: UploadFile) -> list[kindle.Clipping]:
+    raw = await file.read(_CLIPPINGS_MAX_BYTES + 1)
+    if len(raw) > _CLIPPINGS_MAX_BYTES:
+        raise HTTPException(413, "That file is too large for a Kindle clippings file (20 MB max).")
+    clips = kindle.parse_clippings(raw.decode("utf-8-sig", errors="replace"))
+    if not clips:
+        raise HTTPException(400, "No Kindle highlights found. Choose the “My Clippings.txt” file from your "
+                                 "Kindle's documents folder.")
+    return clips
+
+
+@router.post("/books/{book_id}/kindle/preview")
+async def kindle_preview(book_id: int, file: UploadFile, db: AsyncSession = Depends(get_db)):
+    """Which books are in this clippings file, best match for this book first."""
+    book = await get_book_or_404(db, book_id)
+    return {"books": kindle.summarize(await _read_clippings(file), book.title)}
+
+
+@router.post("/books/{book_id}/kindle/import")
+async def kindle_import(book_id: int, file: UploadFile, kindle_title: str = Form(...),
+                        db: AsyncSession = Depends(get_db)):
+    """Import one Kindle book's highlights (and the notes typed on them) as highlights of this book."""
+    book = await get_book_or_404(db, book_id)
+    clips = await _read_clippings(file)
+    if not any(c.title == kindle_title for c in clips):
+        raise HTTPException(400, "That book isn't in this clippings file.")
+    return await kindle.import_clippings(db, book, clips, kindle_title)
 
 
 @router.get("/books/{book_id}/highlights")

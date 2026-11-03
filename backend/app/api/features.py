@@ -8,13 +8,14 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chapter, Chunk, Entity, EntityRelation, TimelineEvent
 from app.db.session import get_db
-from app.features import analysis, quotes, summaries
+from app.features import analysis, essay, quotes, summaries, translate
 from app.features.common import get_chapter, ready_book
 from app.features.jobs import is_running, job_dict, latest_job, start_job
 from app.llm.client import llm_configured, not_configured_message
@@ -190,6 +191,83 @@ async def quote_finder(book_id: int, req: QuoteRequest, db: AsyncSession = Depen
     max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
     found = await quotes.find_quotes(db, book_id, book.title, req.topic, max_ch, req.limit)
     return {"topic": req.topic, "quotes": found}
+
+
+# ---------------------------------------------------------------- essay helper
+
+class EssayRequest(BaseModel):
+    thesis: str = Field(min_length=5, max_length=600)
+    max_chapter: int | None = None
+    sections: int = Field(default=3, ge=2, le=5)
+
+
+@router.post("/books/{book_id}/essay")
+async def essay_outline(book_id: int, req: EssayRequest, db: AsyncSession = Depends(get_db)):
+    book = await ready_book(db, book_id)
+    require_llm()
+    max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
+    return await essay.outline(db, book, req.thesis.strip(), max_ch, req.sections)
+
+
+class EssayExport(BaseModel):
+    essay: dict
+
+
+@router.post("/books/{book_id}/essay/export")
+async def essay_export(book_id: int, req: EssayExport, db: AsyncSession = Depends(get_db)):
+    """The outline as a Markdown file (the browser already has the outline; this just formats it)."""
+    book = await ready_book(db, book_id)
+    try:
+        md = essay.to_markdown(book, req.essay)
+    except (KeyError, TypeError) as e:
+        raise HTTPException(400, "That isn't an essay outline from BookMind.") from e
+    return Response(md, media_type="text/markdown; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="essay-outline.md"'})
+
+
+# ---------------------------------------------------------------- side-by-side translation
+
+def _language(value: str) -> str:
+    lang = " ".join(value.split())
+    if not translate.LANGUAGE.match(lang):
+        raise HTTPException(400, "Give a language name, e.g. French, Spanish or Brazilian Portuguese.")
+    return lang
+
+
+async def _translation_state(db: AsyncSession, chapter: Chapter, language: str) -> dict:
+    hit = await translate.cached(db, chapter.id, language)
+    if hit is not None:
+        return {"status": "done", "language": language, "paragraphs": hit.paragraphs}
+    job = job_dict(await latest_job(db, chapter.book_id, translate.job_kind(chapter.id, language)))
+    return {"status": job["status"] if job else "none", "language": language, "job": job}
+
+
+@router.get("/chapters/{chapter_id}/translation")
+async def get_translation(chapter_id: int, language: str, db: AsyncSession = Depends(get_db)):
+    chapter = await db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(404, "Chapter not found.")
+    return await _translation_state(db, chapter, _language(language))
+
+
+class TranslateRequest(BaseModel):
+    language: str = Field(min_length=2, max_length=40)
+
+
+@router.post("/chapters/{chapter_id}/translation")
+async def start_translation(chapter_id: int, req: TranslateRequest, db: AsyncSession = Depends(get_db)):
+    """Translate a chapter in the background (or return the saved translation)."""
+    chapter = await db.get(Chapter, chapter_id)
+    if chapter is None:
+        raise HTTPException(404, "Chapter not found.")
+    language = _language(req.language)
+    state = await _translation_state(db, chapter, language)
+    if state["status"] in ("done", "running"):
+        return state
+    require_llm()
+    job = await start_job(chapter.book_id, translate.job_kind(chapter.id, language),
+                          translate.translation_job(chapter.book_id, chapter.id, language))
+    return {"status": "running", "language": language, "job": job}
 
 
 @router.get("/books/{book_id}/jobs/{kind}")

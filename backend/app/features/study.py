@@ -1,24 +1,25 @@
 """Study mode: quizzes (multiple choice, true/false, short answer) and SM-2 flashcards."""
 from __future__ import annotations
 
+import html
 import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import Book, Chunk, Flashcard, Quiz
+from app.db.models import Book, Chapter, Chunk, Flashcard, Quiz
 from app.features.common import max_input_chars, sample_chunks
-
-
-def _passage_budget(n: int) -> int:
-    """How many ~2,000-char passages to send: enough for n items, within the model's context."""
-    return max(2, min(max(n, 4), 14, max_input_chars() // 2200))
 from app.llm import client as llm
 from app.llm.prompts import study as P
 
 QUESTION_TYPES = ("multiple_choice", "true_false", "short_answer")
 GRADES = {"again": 1, "hard": 3, "good": 4, "easy": 5}  # SM-2 quality scores
+
+
+def _passage_budget(n: int) -> int:
+    """How many ~2,000-char passages to send: enough for n items, within the model's context."""
+    return max(2, min(max(n, 4), 14, max_input_chars() // 2200))
 
 
 # ---------------------------------------------------------------- quizzes
@@ -159,3 +160,25 @@ async def generate_cards(db: AsyncSession, book: Book, chapter_id: int | None, m
     for c in cards:
         await db.refresh(c)
     return cards
+
+
+# ---------------------------------------------------------------- Anki export
+
+def _anki_field(text: str) -> str:
+    # Tabs/newlines would break the tab-separated rows; the file declares #html:true.
+    return html.escape(text.strip()).replace("\t", " ").replace("\r", "").replace("\n", "<br>")
+
+
+def to_anki(book: Book, rows: list[tuple[Flashcard, Chapter | None]]) -> str:
+    """Anki "Notes in plain text" import file: Basic note type, one deck per book, chapter tags."""
+    deck = re.sub(r"[:\s]+", " ", book.title).strip() or "Book"  # "::" would nest decks in Anki
+    book_tag = re.sub(r"[^\w]+", "_", book.title.lower()).strip("_")[:40] or "book"
+    lines = ["#separator:tab", "#html:true", "#notetype:Basic", f"#deck:BookMind::{deck}", "#tags column:3"]
+    for card, chapter in rows:
+        back = _anki_field(card.back)
+        tags = ["bookmind", book_tag]
+        if chapter is not None:
+            back += f'<br><br><small>{_anki_field(f"{book.title} — {chapter.title}")}</small>'
+            tags.append(f"ch{chapter.position:02d}")
+        lines.append("\t".join([_anki_field(card.front), back, " ".join(tags)]))
+    return "\n".join(lines) + "\n"

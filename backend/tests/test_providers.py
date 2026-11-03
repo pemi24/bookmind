@@ -239,6 +239,58 @@ async def test_gemini_retired_model_reports_googles_reason():
     assert "no longer available" in e.value.message and "LLM_MODEL" in e.value.message
 
 
+async def test_gemini_retries_busy_answers(monkeypatch):
+    from app.llm.providers import gemini as gmod
+
+    monkeypatch.setattr(gmod, "_RETRY_DELAYS", (0.0, 0.0))
+    calls = {"n": 0}
+    busy = {"error": {"message": "This model is currently experiencing high demand."}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(503, json=busy)
+        if ":streamGenerateContent" in str(request.url):
+            return httpx.Response(200, text='data: {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}\r\n\r\n')
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"answer": 1}'}]}}]})
+
+    assert "".join([c async for c in gemini(handler).stream_chat("s", [{"role": "user", "content": "q"}])]) == "ok"
+    assert calls["n"] == 2
+    calls["n"] = 0
+    assert (await gemini(handler).generate_json("s", "q", Small)).answer == 1 and calls["n"] == 2
+
+    # The main model stays overloaded: after its retries, the fallback model answers.
+    urls = []
+
+    def main_busy(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        if "gemini-flash-lite-latest" not in str(request.url):
+            return httpx.Response(503, json=busy)
+        return httpx.Response(200, text='data: {"candidates": [{"content": {"parts": [{"text": "lite"}]}}]}\r\n\r\n')
+
+    assert "".join([c async for c in gemini(main_busy).stream_chat("s", [{"role": "user", "content": "q"}])]) == "lite"
+    assert len(urls) == 4 and "gemini-flash-lite-latest" in urls[-1]  # 3 tries on the main model, then the fallback
+
+    def always_busy(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(503, json=busy)
+
+    calls["n"] = 0
+    with pytest.raises(LLMError) as e:
+        async for _ in gemini(always_busy).stream_chat("s", [{"role": "user", "content": "q"}]):
+            pass
+    assert calls["n"] == 6 and "temporarily unavailable" in e.value.message  # both models tried, then a clear error
+
+    def bad_request(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(400, json={"error": {"message": "Invalid argument."}})
+
+    calls["n"] = 0
+    with pytest.raises(LLMError):
+        await gemini(bad_request).generate_json("s", "q", Small)
+    assert calls["n"] == 1  # not retried, and no fallback: another model wouldn't fix a bad request
+
+
 # ------------------------------------------------------------------ registry / Anthropic
 
 def test_create_provider_by_name_and_defaults():

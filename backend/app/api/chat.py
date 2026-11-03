@@ -8,7 +8,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.books import get_book_or_404
@@ -35,6 +35,7 @@ class ChatRequest(BaseModel):
     spoiler_chapter: int | None = None  # "I've read up to chapter N" (chapter position)
     persona: str | None = Field(default=None, max_length=200)
     compare_book_ids: list[int] = Field(default_factory=list)  # extra books for compare mode
+    resend_from: int | None = None  # id of a user message to replace (with everything after it)
 
 
 def sse(event: str, data) -> str:
@@ -147,15 +148,25 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
         db.add(conv)
         await db.flush()
 
+    if req.resend_from is not None:
+        # Resend / edit: drop that question and everything after it, so the old turn
+        # doesn't linger in the history used for follow-ups.
+        first = await db.get(Message, req.resend_from)
+        if first is None or first.conversation_id != conv.id or first.role != "user":
+            raise HTTPException(404, "Message to resend not found in this conversation.")
+        await db.execute(delete(Message).where(Message.conversation_id == conv.id, Message.id >= first.id))
+        await db.flush()
+
     history = await _history(db, conv.id)
     meta = {"style": req.style, "spoiler_chapter": req.spoiler_chapter, "persona": req.persona,
             "compare_book_ids": compare_ids}
-    db.add(Message(conversation_id=conv.id, role="user", content=req.message, meta=meta))
+    user_msg = Message(conversation_id=conv.id, role="user", content=req.message, meta=meta)
+    db.add(user_msg)
     await db.commit()
-    conv_id = conv.id
+    conv_id, user_msg_id = conv.id, user_msg.id
 
     async def stream():
-        yield sse("conversation", {"id": conv_id})
+        yield sse("conversation", {"id": conv_id, "user_message_id": user_msg_id})
         answer = ""
         try:
             yield sse("status", {"stage": "searching"})

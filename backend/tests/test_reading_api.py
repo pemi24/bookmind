@@ -56,5 +56,86 @@ async def test_highlights_and_reading_progress(test_db, fake_llm):  # noqa: F811
 
             assert (await c.delete(f"/api/books/{book_id}/reading")).status_code == 204
             assert (await c.get(f"/api/books/{book_id}")).json()["reading"] is None
+
+            # --- Kindle import
+            from tests.test_features_unit import CLIPPINGS
+            f = {"file": ("My Clippings.txt", CLIPPINGS.encode("utf-8"), "text/plain")}
+            prev = (await c.post(f"/api/books/{book_id}/kindle/preview", files=f)).json()["books"]
+            assert prev[0]["title"] == "The Lighthouse Keeper: A Novel"
+            res = (await c.post(f"/api/books/{book_id}/kindle/import", files=f,
+                                data={"kindle_title": prev[0]["title"]})).json()
+            assert res == {"imported": 1, "located": 1, "duplicates": 0, "notes_attached": 1, "standalone_notes": 0}
+            hl = (await c.get(f"/api/books/{book_id}/highlights", params={"chapter_id": ch2})).json()
+            kin = next(n for n in hl if "kindle" in n["tags"])
+            assert kin["comment"] == "Where does the key come from?" and kin["location"]["char_end"] > kin["location"]["char_start"]
+            again = (await c.post(f"/api/books/{book_id}/kindle/import", files=f,
+                                  data={"kindle_title": prev[0]["title"]})).json()
+            assert again["imported"] == 0 and again["duplicates"] == 1  # importing twice adds nothing
+            bad = await c.post(f"/api/books/{book_id}/kindle/preview",
+                               files={"file": ("x.txt", b"just some text", "text/plain")})
+            assert bad.status_code == 400
+        finally:
+            await c.delete(f"/api/books/{book_id}")
+
+
+async def test_library_essay_translation_stats(test_db, fake_llm):  # noqa: F811
+    import asyncio
+    import json
+
+    from app.main import app
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+        r = await c.post("/api/books", files={"file": ("lib.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
+        book_id = r.json()["id"]
+        try:
+            assert (await _wait_ready(c, book_id))["status"] == "ready"
+            chapters = (await c.get(f"/api/books/{book_id}/chapters")).json()
+
+            # --- whole-library search, with this book's spoiler limit applied
+            res = (await c.post("/api/library/search", json={
+                "q": "brandy smugglers diaries", "book_ids": [book_id], "max_chapters": {str(book_id): 3}})).json()
+            assert res["results"] and res["results"][0]["chapter_position"] == 3
+            guarded = (await c.post("/api/library/search", json={
+                "q": "brandy smugglers diaries", "book_ids": [book_id], "max_chapters": {str(book_id): 1}})).json()
+            assert all(s["chapter_position"] <= 1 for s in guarded["results"])
+            ask = await c.post("/api/library/ask", json={"q": "What was in the cellar?", "book_ids": [book_id]})
+            events = [json.loads(line[6:]) for line in ask.text.splitlines() if line.startswith("data: ")]
+            assert any("sources" in e for e in events) and any("cited" in e for e in events)
+
+            # --- essay helper: real quotes kept (with location), invented ones dropped
+            essay = (await c.post(f"/api/books/{book_id}/essay", json={"thesis": "The lighthouse hides its past."})).json()
+            ev = essay["sections"][0]["evidence"]
+            assert len(ev) == 1 and essay["dropped_quotes"] == 1 and ev[0]["char_end"] > ev[0]["char_start"]
+            md = await c.post(f"/api/books/{book_id}/essay/export", json={"essay": essay})
+            assert md.status_code == 200 and "**Thesis:**" in md.text and ev[0]["quote"] in md.text
+
+            # --- translation: background job, then aligned paragraphs, then cached
+            ch1 = chapters[0]["id"]
+            start = (await c.post(f"/api/chapters/{ch1}/translation", json={"language": "French"})).json()
+            assert start["status"] in ("running", "done")
+            for _ in range(120):
+                state = (await c.get(f"/api/chapters/{ch1}/translation", params={"language": "French"})).json()
+                if state["status"] in ("done", "failed"):
+                    break
+                await asyncio.sleep(0.25)
+            assert state["status"] == "done", state
+            text = (await c.get(f"/api/chapters/{ch1}")).json()["text"]
+            assert len(state["paragraphs"]) == len(text.split("\n\n"))
+            assert all(p.startswith("FR: ") for p in state["paragraphs"] if sum(ch.isalpha() for ch in p) >= 2)
+            again = (await c.post(f"/api/chapters/{ch1}/translation", json={"language": "French"})).json()
+            assert again["status"] == "done"  # cached, no new job
+            bad = await c.get(f"/api/chapters/{ch1}/translation", params={"language": "<script>"})
+            assert bad.status_code == 400
+
+            # --- stats: reading time and card reviews add up per day
+            await c.post(f"/api/books/{book_id}/reading/time", json={"seconds": 45})
+            await c.post(f"/api/books/{book_id}/reading/time", json={"seconds": 30})
+            assert (await c.post(f"/api/books/{book_id}/reading/time", json={"seconds": 9999})).status_code == 422
+            cards = (await c.post(f"/api/books/{book_id}/flashcards", json={"count": 3})).json()
+            await c.post(f"/api/flashcards/{cards[0]['id']}/review", json={"grade": "good"})
+            st = (await c.get("/api/stats")).json()
+            mine = next(b for b in st["books"] if b["id"] == book_id)
+            assert mine["seconds"] == 75 and st["today_seconds"] >= 75 and st["daily"][-1]["cards"] >= 1
+            assert st["streak_days"] >= 1 and len(st["daily"]) == 30
         finally:
             await c.delete(f"/api/books/{book_id}")

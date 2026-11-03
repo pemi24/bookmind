@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { HighlightColor, Note } from "../../types";
 import { useWorkspace } from "../../workspace";
+import KindleImport from "./KindleImport";
 import { Button, buttonClasses, EmptyState, ErrorBox, LocationChip, Markdown, PanelShell } from "../ui";
 
 const KIND_LABEL: Record<Note["kind"], string> = { note: "Note", answer: "Answer", passage: "Highlight", quote: "Quote" };
@@ -84,6 +85,7 @@ export default function NotesPanel({ refreshKey }: { refreshKey: number }) {
           <Button variant="ghost" onClick={() => setDraft({ title: "", content: "" })}>
             <Plus size={14} /> New note
           </Button>
+          <KindleImport onImported={load} />
           {(["md", "pdf"] as const).map((fmt) => (
             <a
               key={fmt}

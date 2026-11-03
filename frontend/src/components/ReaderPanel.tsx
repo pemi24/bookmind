@@ -1,7 +1,7 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Languages, Loader2, Maximize2, Minimize2, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { ChapterInfo, ChapterText, HighlightColor, Note, Reading, SearchHit } from "../types";
+import type { ChapterInfo, ChapterText, HighlightColor, Note, Reading, SearchHit, TranslationState } from "../types";
 import { findLoose, loadPref, savePref } from "../utils";
 import { buttonClasses } from "./ui";
 
@@ -30,12 +30,19 @@ const SWATCH: Record<HighlightColor, string> = {
 };
 // A chapter that fits on one screen can't be scrolled; it counts as read after this long.
 const SHORT_CHAPTER_READ_MS = 15_000;
+// Reading time: counted in ticks while the page is visible and the reader was used recently.
+const TICK_SECONDS = 15;
+const IDLE_AFTER_MS = 120_000;
+const LANGUAGES = [
+  "English", "French", "Spanish", "German", "Italian", "Portuguese", "Dutch", "Russian", "Polish", "Turkish",
+  "Arabic", "Hindi", "Chinese (Simplified)", "Japanese", "Korean", "Swahili",
+];
 
 /**
  * Render chapter text as paragraphs, wrapping highlight ranges in <mark> and inserting
  * page markers at page boundaries. Offsets are character offsets into chapter.text.
  */
-function renderChapter(text: string, ranges: Range[], pageMap: [number, number][]) {
+function renderChapter(text: string, ranges: Range[], pageMap: [number, number][], translation?: string[]) {
   const marks = pageMap.filter(([o]) => o > 0);
   const out: JSX.Element[] = [];
   let offset = 0;
@@ -102,10 +109,23 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
         children.push(seg);
       }
     }
-    out.push(
+    const original = (
       <p key={pi} data-p={pStart} className="my-[0.9em]">
         {children}
-      </p>,
+      </p>
+    );
+    // Side by side when the reader is wide enough, else the translation under each paragraph.
+    out.push(
+      translation ? (
+        <div key={pi} className="grid gap-x-8 @2xl:grid-cols-2">
+          {original}
+          <p className="mb-[0.9em] border-l-2 border-brand-200 pl-3 text-stone-600 @2xl:my-[0.9em] @2xl:border-0 @2xl:pl-0 dark:border-brand-900 dark:text-stone-300">
+            {translation[pi] ?? ""}
+          </p>
+        </div>
+      ) : (
+        original
+      ),
     );
   });
   return out;
@@ -157,6 +177,9 @@ export default function ReaderPanel({
   const [showHits, setShowHits] = useState(false);
   const [scrollNonce, setScrollNonce] = useState(0);
   const [fraction, setFraction] = useState(0); // how far through the current chapter
+  const [translateTo, setTranslateTo] = useState<string | null>(null);
+  const [langPicker, setLangPicker] = useState(false);
+  const [translation, setTranslation] = useState<TranslationState | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Reading progress. Only the reader's own navigation and scrolling count: jumping to a cited
@@ -294,7 +317,63 @@ export default function ReaderPanel({
     return r;
   }, [chapter, highlights, target, hits, active]);
 
-  const body = useMemo(() => (chapter ? renderChapter(chapter.text, ranges, chapter.page_map) : null), [chapter, ranges]);
+  const shownTranslation = translation?.status === "done" ? translation.paragraphs : undefined;
+  const body = useMemo(
+    () => (chapter ? renderChapter(chapter.text, ranges, chapter.page_map, shownTranslation) : null),
+    [chapter, ranges, shownTranslation],
+  );
+
+  // Side-by-side translation: a saved one loads at once; otherwise it's translated in the background (polled).
+  useEffect(() => {
+    setTranslation(null);
+    if (!chapter || !translateTo) return;
+    let alive = true;
+    let timer: number | undefined;
+    const poll = async (start: boolean) => {
+      try {
+        const st = start ? await api.translate(chapter.id, translateTo) : await api.translation(chapter.id, translateTo);
+        if (!alive) return;
+        setTranslation(st);
+        if (st.status === "running") timer = window.setTimeout(() => poll(false), 2000);
+      } catch (e) {
+        if (!alive) return;
+        setTranslation({ status: "failed", language: translateTo });
+        notify?.((e as Error).message);
+      }
+    };
+    poll(true);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapter, translateTo]);
+
+  const chooseLanguage = (lang: string) => {
+    const l = lang.trim();
+    setLangPicker(false);
+    if (!l) return;
+    savePref("reader:lang", l);
+    setTranslateTo(l);
+  };
+
+  // Reading time for the stats page.
+  const lastActive = useRef(Date.now());
+  useEffect(() => {
+    let seconds = 0;
+    const sendTime = () => {
+      if (seconds) api.addReadingTime(bookId, seconds).catch(() => {});
+      seconds = 0;
+    };
+    const t = window.setInterval(() => {
+      if (document.visibilityState === "visible" && Date.now() - lastActive.current < IDLE_AFTER_MS) seconds += TICK_SECONDS;
+      if (seconds >= 60) sendTime();
+    }, TICK_SECONDS * 1000);
+    return () => {
+      window.clearInterval(t);
+      sendTime();
+    };
+  }, [bookId]);
 
   // Scroll to the active search hit, else the cited passage, else where the reader left off, else the top.
   useEffect(() => {
@@ -332,6 +411,7 @@ export default function ReaderPanel({
   const markUserScroll = () => {
     userScrolled.current = true;
     byUser.current = true;
+    lastActive.current = Date.now();
   };
 
   const runSearch = async () => {
@@ -510,6 +590,47 @@ export default function ReaderPanel({
         <button onClick={() => changeFont(1)} disabled={fontIdx === FONT_SIZES.length - 1} className={`${iconBtn} hidden text-sm font-semibold sm:block`} title="Larger text">
           A+
         </button>
+        <div className="relative">
+          <button
+            onClick={() => (translateTo ? setTranslateTo(null) : setLangPicker((v) => !v))}
+            className={`${iconBtn} ${translateTo ? "!bg-brand-100 !text-brand-700 dark:!bg-brand-900/60 dark:!text-brand-200" : ""}`}
+            title={translateTo ? `Hide the ${translateTo} translation` : "Translate side by side"}
+            aria-pressed={!!translateTo}
+          >
+            <Languages size={16} />
+          </button>
+          {langPicker && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                chooseLanguage(String(new FormData(e.currentTarget).get("lang") ?? ""));
+              }}
+              className="absolute right-0 z-30 mt-1 w-60 rounded-lg border border-stone-200 bg-white p-2 font-sans shadow-lg dark:border-stone-700 dark:bg-stone-900"
+            >
+              <label htmlFor="reader-lang" className="text-xs font-medium text-stone-500">Translate into</label>
+              <div className="mt-1 flex gap-1">
+                <input
+                  id="reader-lang"
+                  name="lang"
+                  list="reader-lang-options"
+                  autoFocus
+                  defaultValue={loadPref<string>("reader:lang", "French")}
+                  onKeyDown={(e) => e.key === "Escape" && setLangPicker(false)}
+                  className="min-w-0 flex-1 rounded-md border border-stone-300 bg-transparent px-2 py-1 text-sm dark:border-stone-700"
+                />
+                <button type="submit" className="rounded-md bg-brand-600 px-2 text-xs font-medium text-white hover:bg-brand-700">
+                  Go
+                </button>
+              </div>
+              <datalist id="reader-lang-options">
+                {LANGUAGES.map((l) => (
+                  <option key={l} value={l} />
+                ))}
+              </datalist>
+              <p className="mt-1.5 text-[11px] leading-snug text-stone-400">Uses your AI model. Each chapter is translated once, then saved.</p>
+            </form>
+          )}
+        </div>
         <button onClick={onToggleExpand} className={`${iconBtn} hidden md:block`} title={expanded ? "Show chat" : "Read full width"}>
           {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
         </button>
@@ -520,6 +641,24 @@ export default function ReaderPanel({
       <div className="h-0.5 bg-stone-100 dark:bg-stone-800" title={`${Math.round(bookFraction * 100)}% through the book`}>
         <div className="h-full bg-brand-500 transition-[width]" style={{ width: `${bookFraction * 100}%` }} />
       </div>
+
+      {translateTo && translation && translation.status !== "done" && (
+        <div className="flex items-center gap-2 border-b border-stone-200 bg-brand-50 px-3 py-1.5 text-xs text-brand-800 dark:border-stone-800 dark:bg-brand-950/40 dark:text-brand-200">
+          {translation.status === "failed" ? (
+            <span className="flex-1">Translation into {translateTo} failed{translation.job?.error ? `: ${translation.job.error}` : "."}</span>
+          ) : (
+            <>
+              <Loader2 size={12} className="shrink-0 animate-spin" />
+              <span className="flex-1">
+                Translating this chapter into {translateTo}… {Math.round((translation.job?.progress ?? 0) * 100)}%
+              </span>
+            </>
+          )}
+          <button onClick={() => setTranslateTo(null)} className="rounded p-0.5 hover:bg-brand-100 dark:hover:bg-brand-900" aria-label="Close translation">
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative border-b border-stone-200 px-2 py-1.5 dark:border-stone-800">
@@ -687,7 +826,7 @@ export default function ReaderPanel({
             </div>
           </div>
         )}
-        <div className={expanded ? "mx-auto max-w-2xl" : ""}>
+        <div className={`@container ${expanded ? (shownTranslation ? "mx-auto max-w-6xl" : "mx-auto max-w-2xl") : ""}`}>
           {error && <p className="font-sans text-sm text-red-600">{error}</p>}
           {chapter && (
             <>
