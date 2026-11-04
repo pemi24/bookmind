@@ -74,6 +74,10 @@ async def fake_complete_json(system, user, schema, **kw):
     if schema is book.BookProfile:
         return book.BookProfile(is_fiction=True, questions=["What is in the cellar?"])
     from app.llm.prompts import essay, translate
+    from app.llm.prompts import query as query_prompts
+
+    if schema is query_prompts.ExpandOut:  # the second search before "the book doesn't say"
+        return query_prompts.ExpandOut(queries=["boat", "harbour"])
 
     if schema is essay.EssayOut:
         first = re.search(r"\[1\]\n([^.]+\.)", user).group(1)  # a real sentence from passage 1

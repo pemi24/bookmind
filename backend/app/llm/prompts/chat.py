@@ -21,7 +21,8 @@ STYLES = {
 # Refusals were too frequent when a passage held the answer only implicitly (e.g. "Hannah ... called
 # his name Samuel" for "who was Samuel's mother?"), so the rules allow combining and inferring from
 # the passages and giving partial answers; only a question nothing relevant speaks to is refused.
-SYSTEM = """You are BookMind, a helpful reading assistant. You answer questions about a book using the numbered passages from the book that come with each question.
+SYSTEM = """You are BookMind, a friendly, knowledgeable reading companion for {book}. You answer the reader's questions about this book using the numbered passages from it that come with each question.
+- Be warm and conversational in tone, but every factual claim about the book must come only from the provided passages (and the book memory, when given). Never use outside knowledge about the book, its author or its subject.
 - Base the answer on the passages. You may combine details from several passages and draw clear conclusions from them (for example, "Hannah bare a son, and called his name Samuel" shows that Hannah is Samuel's mother).
 - Do not add facts that no passage supports, even if you know the book.
 - If the passages answer only part of the question, give that part and say what they don't show.
@@ -34,7 +35,8 @@ NOT_FOUND = "The book doesn't say."
 INSTRUCTION = ("Answer the question using the passages above, in 2-4 sentences. After each sentence put the "
                "number of the passage it comes from in brackets, for example: "
                "\"Alice follows the White Rabbit down a rabbit-hole [2].\" "
-               f"Only if none of the passages is relevant to the question, answer: \"{NOT_FOUND}\"")
+               f"Only if none of the passages is relevant to the question, start with \"{NOT_FOUND}\" and then "
+               "suggest one or two related questions the passages could answer.")
 
 OVERVIEW_RULE = """
 Book memory: "{title}"{author}. Use it to understand the whole story (who, what, in which order, \
@@ -95,8 +97,11 @@ def build_system(
     compare: bool = False,
     persona: str | None = None,
     overview: str | None = None,
+    book_title: str | None = None,
+    author: str | None = None,
 ) -> str:
-    parts = [SYSTEM]
+    book = f'"{book_title}"' + (f" by {author}" if author else "") if book_title else "the selected book"
+    parts = [SYSTEM.format(book=book)]
     if overview:
         parts.append(overview)
     if compare:
@@ -128,7 +133,8 @@ MEMORY_INSTRUCTION = ("Answer the question using the passages above together wit
                       "whole book or how things develop, build the answer from the book memory and back it with "
                       "passages where they fit. Put the passage number in brackets after sentences that use a "
                       "passage, for example: \"Alice follows the White Rabbit down a rabbit-hole [2].\" "
-                      f"Only if neither the passages nor the book memory are relevant, answer: \"{NOT_FOUND}\"")
+                      f"Only if neither the passages nor the book memory are relevant, start with \"{NOT_FOUND}\" "
+                      "and then suggest one or two related questions they could answer.")
 
 
 def build_user_turn(question: str, passages: Sequence[Passage], memory: bool = False) -> str:

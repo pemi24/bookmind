@@ -1,5 +1,5 @@
-import { BookmarkPlus, Copy, History, Mic, MicOff, Pencil, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2, VolumeX } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { BookmarkPlus, BookOpen, Copy, History, Mic, MicOff, Pencil, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2, VolumeX } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamChat } from "../api";
 import type { ChatMessage, ConversationSummary, Source, Style } from "../types";
 import { useWorkspace } from "../workspace";
@@ -29,6 +29,58 @@ function plainText(markdown: string): string {
 // Mirrors the server's is_not_found(): models word "not in the book" many ways.
 const NOT_FOUND =
   /(?:does|do|did)(?:n.?t| not) (?:say|state|mention|tell|specify|name|reveal|contain|include|provide|give|show|indicate|identify|explain)|(?:could|can)(?:n.?t| ?not) find|not (?:mentioned|stated|specified|named|given|provided|found|covered|in the (?:book|passages))|no (?:information|mention)/i;
+
+// Mirrors starter_questions() on the server: the book's own suggestions, topped up with general ones.
+/* ---------- Welcome greeting: "{title}" marks where the book's title goes ---------- */
+const GREETINGS = [
+  "Hello! How can I assist you with {title}?",
+  "Hi there! What would you like to know about {title}?",
+  "Welcome! How can I help you with {title} today?",
+  "Hello! What can I help you find in {title}?",
+  "Hi! What would you like to explore in {title}?",
+  "Ready to dive into {title}?",
+  "Where shall we start with {title}?",
+  "What's on your mind about {title}?",
+  "Let's talk about {title}. What would you like to know?",
+  "Curious about something in {title}?",
+  "Good to see you! What shall we discover in {title} today?",
+  "Pull up a chair. What would you like to explore in {title}?",
+  "Happy reading! How can I help with {title}?",
+  "Let's open {title} together. What would you like to know?",
+  "Studying {title}? Ask me anything, from characters to themes.",
+  "What part of {title} would you like to understand better?",
+  "Need help with {title}? Ask about a chapter, a character or a quote.",
+];
+const RETURNING_GREETINGS = ["Welcome back to {title}. What are you wondering about?"];
+const TIME_GREETINGS: { from: number; to: number; text: string }[] = [
+  { from: 5, to: 12, text: "Good morning! What shall we explore in {title} today?" },
+  { from: 12, to: 17, text: "Good afternoon! How can I help with {title}?" },
+  { from: 17, to: 22, text: "Good evening! Settling in with {title}?" },
+  { from: 22, to: 29, text: "Late-night reading? What would you like to know about {title}?" }, // 22:00-04:59
+];
+
+/** A greeting for a new chat: any general one, the one for this time of day, "welcome back" for a returning reader. */
+function pickGreeting(returning: boolean, hour = new Date().getHours()): [string, string] {
+  const h = hour < 5 ? hour + 24 : hour;
+  const pool = [
+    ...GREETINGS,
+    ...TIME_GREETINGS.filter((g) => h >= g.from && h < g.to).map((g) => g.text),
+    ...(returning ? RETURNING_GREETINGS : []),
+  ];
+  const [before, after] = pool[Math.floor(Math.random() * pool.length)].split("{title}");
+  return [before, after ?? ""];
+}
+
+const DEFAULT_STARTERS = ["What is this book about?", "Who are the main characters?", "Summarize the first chapter.", "What are the main themes?"];
+
+function starterQuestions(suggested: string[]): string[] {
+  const out = suggested.filter((q) => q.trim());
+  for (const q of DEFAULT_STARTERS) {
+    if (out.length >= 5) break;
+    if (!out.includes(q)) out.push(q);
+  }
+  return out.slice(0, 5);
+}
 
 /** How many source chips SourceList would show for this answer. */
 function sourceCount(m: ChatMessage): number {
@@ -80,15 +132,29 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
   const [speaking, setSpeaking] = useState<number | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [citesShown, setCitesShown] = useState<Set<number>>(new Set()); // answers whose sources are visible
+  const [greetingSeed, setGreetingSeed] = useState(0); // new chat -> new greeting
   const abortRef = useRef<AbortController | null>(null);
   const recRef = useRef<{ stop: () => void } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const others = books.filter((b) => b.id !== book.id && b.status === "ready");
 
+  const [historyFor, setHistoryFor] = useState<number | null>(null); // book whose chat history has loaded
   const loadConversations = useCallback(() => {
-    api.conversations(book.id).then(setConversations).catch(() => {});
+    api
+      .conversations(book.id)
+      .then(setConversations)
+      .catch(() => {})
+      .finally(() => setHistoryFor(book.id));
   }, [book.id]);
+
+  // Picked once the history is known (so "welcome back" can apply) and again for each new chat.
+  const historyReady = historyFor === book.id;
+  const greeting = useMemo(
+    () => pickGreeting(conversations.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [book.id, greetingSeed, historyReady],
+  );
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -139,6 +205,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     setMessages([]);
     setCitesShown(new Set());
     setEditing(null);
+    setGreetingSeed((n) => n + 1);
   };
 
   const changeMode = (m: Mode) => {
@@ -366,7 +433,35 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
       {/* Messages */}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6" onClick={() => setShowHistory(false)}>
         <div className="mx-auto flex max-w-3xl flex-col gap-5">
-          {messages.length === 0 && (
+          {messages.length === 0 && mode === "ask" && historyReady && (
+            // Welcome, centred like a new chat: a large greeting for this book, starter questions as chips.
+            <div className="flex min-h-[40vh] flex-col items-center justify-center text-center sm:min-h-[55vh]">
+              <h2 className="flex max-w-2xl items-start justify-center gap-2.5 font-serif text-2xl leading-snug font-normal text-stone-800 sm:gap-3 sm:text-3xl md:text-4xl dark:text-stone-100">
+                <BookOpen className="mt-1 size-6 shrink-0 text-brand-500 sm:size-7 md:size-9" aria-hidden />
+                <span>
+                  {greeting[0]}
+                  <em>{book.title}</em>
+                  {greeting[1]}
+                </span>
+              </h2>
+              {maxChapter !== null && (
+                <p className="mt-3 text-sm text-stone-500">Spoiler guard is on: I'll only use chapters 1–{maxChapter}.</p>
+              )}
+              <div className="mt-8 flex max-w-2xl flex-wrap justify-center gap-2">
+                {starterQuestions(book.suggested_questions).map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => send(q)}
+                    title={q}
+                    className="max-w-full truncate rounded-full border border-stone-200 bg-white px-3.5 py-1.5 text-sm text-stone-600 transition hover:border-brand-400 hover:text-stone-900 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300 dark:hover:text-stone-100 sm:max-w-[22rem]"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {messages.length === 0 && mode !== "ask" && (
             <div className="mt-8 text-center">
               <h2 className="text-xl font-semibold">
                 {mode === "persona" ? (persona ? `Talk to ${persona}` : "Talk to a character") : mode === "compare" ? "Compare books" : `Ask anything about “${book.title}”`}
@@ -379,19 +474,6 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
                     : "Answers come only from the book, with clickable sources."}
                 {maxChapter !== null && ` Spoiler guard: chapters 1–${maxChapter} only.`}
               </p>
-              {mode === "ask" && book.suggested_questions.length > 0 && (
-                <div className="mx-auto mt-6 grid max-w-2xl gap-2 sm:grid-cols-2">
-                  {book.suggested_questions.map((q) => (
-                    <button
-                      key={q}
-                      onClick={() => send(q)}
-                      className="rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-left text-sm text-stone-700 transition hover:border-brand-400 hover:shadow-sm dark:border-stone-800 dark:bg-stone-900 dark:text-stone-300"
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
           {messages.map((m, i) =>

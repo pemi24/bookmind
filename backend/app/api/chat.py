@@ -15,9 +15,10 @@ from app.api.books import get_book_or_404
 from app.config import get_settings
 from app.db.models import Book, Chapter, Citation, Conversation, Message
 from app.db.session import SessionLocal, get_db
-from app.features import memory, summaries
+from app.features import intent, memory, summaries
 from app.llm import client as llm
 from app.llm.prompts import chat as chat_prompts
+from app.llm.prompts import intent as intent_prompts
 from app.llm.prompts import query as query_prompts
 from app.retrieval.hybrid import Passage, search_book, search_books
 
@@ -198,7 +199,9 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
         await db.flush()
 
     history = await _history(db, conv.id)
-    book_title = book.title
+    book_title, book_author = book.title, book.author
+    starters = intent_prompts.starter_questions(book.suggested_questions or [])
+    compare_titles = [(await db.get(Book, b)).title for b in compare_ids]
     overview, has_memory = (None, False) if compare_ids else await _overview(db, book, req.spoiler_chapter)
     meta = {"style": req.style, "spoiler_chapter": req.spoiler_chapter, "persona": req.persona,
             "compare_book_ids": compare_ids}
@@ -207,23 +210,71 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
     await db.commit()
     conv_id, user_msg_id = conv.id, user_msg.id
 
+    async def reply_without_book(text: str, kind: str):
+        """Small talk, questions about the app, off-topic or nothing found: a direct reply, no model answer."""
+        yield sse("intent", {"intent": kind})
+        yield sse("delta", {"text": text})
+        async with SessionLocal() as wdb:
+            msg = Message(conversation_id=conv_id, role="assistant", content=text, meta={**meta, "intent": kind})
+            wdb.add(msg)
+            await wdb.flush()
+            conv_row = await wdb.get(Conversation, conv_id)
+            conv_row.updated_at = func.now()
+            await wdb.commit()
+            yield sse("done", {"message_id": msg.id, "cited": [], "intent": kind})
+
     async def stream():
         yield sse("conversation", {"id": conv_id, "user_message_id": user_msg_id})
         answer = ""
         try:
             yield sse("status", {"stage": "searching"})
+            # 1. What kind of message is this? (Talking to a character: everything goes to the character.)
+            route = intent.Route("book_question", by="persona") if req.persona else                 await intent.route(req.message, history, book_title)
+            checked: list[Passage] | None = None
+            if route.intent == "off_topic":
+                # Double-check against the book before refusing: a strong match means it's about the book.
+                async with SessionLocal() as sdb:
+                    checked = await search_book(sdb, req.message, book_id, max_chapter=req.spoiler_chapter)
+                if checked and checked[0].score >= intent.OFF_TOPIC_MAX_RELEVANCE:
+                    route = intent.Route("book_question", by="checked")
+            if route.intent == "smalltalk":
+                async for ev in reply_without_book(intent_prompts.smalltalk_reply(route.kind, book_title, book_author),
+                                                   "smalltalk"):
+                    yield ev
+                return
+            if route.intent == "meta":
+                async for ev in reply_without_book(intent_prompts.meta_reply(book_title, book_author, compare_titles),
+                                                   "meta"):
+                    yield ev
+                return
+            if route.intent == "off_topic":
+                async for ev in reply_without_book(intent_prompts.off_topic_reply(book_title, starters, book_author),
+                                                   "off_topic"):
+                    yield ev
+                return
+
+            # 2. A book question: standalone search query, then retrieval.
             query = await _rewrite_query(history, req.message)
-            async with SessionLocal() as sdb:
-                if compare_ids:
-                    passages = await search_books(sdb, query, [book_id, *compare_ids],
-                                                  {book_id: req.spoiler_chapter}, per_book_k=5)
-                else:
-                    passages = await search_book(sdb, query, book_id, max_chapter=req.spoiler_chapter)
+            if checked is not None and query == req.message and not compare_ids:
+                passages = checked
+            else:
+                async with SessionLocal() as sdb:
+                    if compare_ids:
+                        passages = await search_books(sdb, query, [book_id, *compare_ids],
+                                                      {book_id: req.spoiler_chapter}, per_book_k=5)
+                    else:
+                        passages = await search_book(sdb, query, book_id, max_chapter=req.spoiler_chapter)
             sources = [source_dict(i, p) for i, p in enumerate(passages, start=1)]
             yield sse("sources", {"query": query, "sources": sources})
+            if not passages:
+                # Grounding: with nothing retrieved, the model is never asked to answer from what it knows.
+                async for ev in reply_without_book(intent_prompts.not_found_reply(book_title, starters), "not_found"):
+                    yield ev
+                return
 
             yield sse("status", {"stage": "answering"})
-            system = chat_prompts.build_system(req.style, spoiler, bool(compare_ids), req.persona, overview)
+            system = chat_prompts.build_system(req.style, spoiler, bool(compare_ids), req.persona, overview,
+                                               book_title=book_title, author=book_author)
             messages = [*history, {"role": "user", "content": chat_prompts.build_user_turn(req.message, passages, memory=has_memory)}]
             async for delta in llm.stream_text(system, messages):
                 answer += delta
@@ -250,7 +301,7 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
             used = [] if chat_prompts.is_not_found(answer) else cited_markers(answer, len(passages))
             async with SessionLocal() as wdb:
                 msg = Message(conversation_id=conv_id, role="assistant", content=answer,
-                              meta={**meta, "query": query, "sources": sources})
+                              meta={**meta, "query": query, "sources": sources, "intent": "book_question"})
                 wdb.add(msg)
                 await wdb.flush()
                 for mk in used:
@@ -259,7 +310,7 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
                 conv_row = await wdb.get(Conversation, conv_id)
                 conv_row.updated_at = func.now()
                 await wdb.commit()
-                yield sse("done", {"message_id": msg.id, "cited": used})
+                yield sse("done", {"message_id": msg.id, "cited": used, "intent": "book_question"})
         except llm.LLMError as e:
             yield sse("error", {"message": e.message, "partial": answer})
         except Exception as e:  # noqa: BLE001

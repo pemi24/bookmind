@@ -25,6 +25,11 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   highlighted passage. Follow-ups, saved history, and **edit / resend / retry** for any question.
   Before answering "the book doesn't say", BookMind searches again with other wordings (other
   names, the book's own vocabulary) and answers from what that finds.
+* **Conversational, but grounded** — greetings, thanks and "what can you do?" get a friendly reply
+  about the book right away (no search); questions unrelated to the book are politely declined with
+  example questions; book questions are always answered from retrieved passages only. A quick rule
+  check handles obvious messages and a one-word classification by the AI handles the rest
+  (uncertain = treated as a book question).
 * **Search your library** — passages from every book at once, or one answer drawn from all of them.
 * **Answer styles** — normal, ELI5, student, expert, analogy.
 * **Spoiler guard** — "I've read up to chapter N", or **Follow my reading** to track the furthest
