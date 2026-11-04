@@ -15,7 +15,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
 from app.auth.deps import current_user
-from app.api import auth, books, catalog, chat, features, library, notes, stats, study
+from app.api import account, admin, auth, books, catalog, chat, features, library, notes, stats, study
 from app.config import get_settings
 from app.db.models import AppMeta, Book
 from app.db.session import SessionLocal
@@ -115,7 +115,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for module in (auth, books, chat, features, study, notes, catalog, library, stats):
+for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats):
     app.include_router(module.router)
 
 

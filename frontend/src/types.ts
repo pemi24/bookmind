@@ -78,13 +78,15 @@ export interface ChatMessage {
   error?: string;
 }
 
+export type Theme = "system" | "light" | "dark";
+
 export interface User {
   id: number;
   email: string;
   display_name: string;
   is_admin: boolean;
   email_verified: boolean;
-  settings: Record<string, unknown>;
+  settings: { theme?: Theme; llm_provider?: string; llm_model?: string };
   created_at: string | null;
 }
 

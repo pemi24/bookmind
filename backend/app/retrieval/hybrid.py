@@ -128,9 +128,9 @@ async def search_book(
     """Hybrid search in one of `user_id`'s books (another user's book gives no results)."""
     s = get_settings()
     if not top_k:
-        from app.llm.providers import get_provider  # local import: retrieval doesn't otherwise need the LLM
+        from app.llm.providers import current_provider  # local import: retrieval doesn't otherwise need the LLM
 
-        top_k = s.retrieval_top_k or get_provider().default_top_k
+        top_k = s.retrieval_top_k or current_provider().default_top_k
     qvec = await asyncio.to_thread(get_embedder().embed_query, query)
 
     vec_ids = await vector_search(db, qvec, book_id, max_chapter, s.retrieval_candidates, user_id=user_id)

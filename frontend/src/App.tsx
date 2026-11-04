@@ -16,7 +16,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, watchProgress } from "./api";
+import { account, api, watchProgress } from "./api";
+import AdminPage from "./components/AdminPage";
 import BookMemory from "./components/BookMemory";
 import ChatPanel from "./components/ChatPanel";
 import Discover from "./components/Discover";
@@ -30,13 +31,14 @@ import StudyPanel from "./components/panels/StudyPanel";
 import SummariesPanel from "./components/panels/SummariesPanel";
 import TimelinePanel from "./components/panels/TimelinePanel";
 import ReaderPanel, { type ReaderTarget } from "./components/ReaderPanel";
+import SettingsPage from "./components/SettingsPage";
 import Sidebar, { type Page } from "./components/Sidebar";
 import StatsPage from "./components/StatsPage";
 import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source, User } from "./types";
-import { isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
+import { applyTheme, isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
 
-/* ---------- hash router: #/  ·  #/discover|search|stats  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
+/* ---------- hash router: #/  ·  #/discover|search|stats|settings|admin  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
 const TABS = [
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "summaries", label: "Summaries", icon: FileText },
@@ -54,7 +56,7 @@ type Route =
   | { name: "book"; id: number; tab: Tab; read: boolean; target: PassageLoc | null };
 
 function parseHash(): Route {
-  const page = window.location.hash.match(/^#\/(discover|search|stats)\/?$/);
+  const page = window.location.hash.match(/^#\/(discover|search|stats|settings|admin)\/?$/);
   if (page) return { name: "page", page: page[1] as Page };
   const m = window.location.hash.match(/^#\/book\/(\d+)(?:\/([a-z]+))?(?:\?(.*))?$/);
   if (!m) return { name: "page", page: "library" };
@@ -79,15 +81,17 @@ function useRoute(): [Route, (hash: string) => void] {
 
 function useTheme() {
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  useEffect(() => {
+    // Settings can change the theme too: follow the page itself.
+    const html = document.documentElement;
+    const obs = new MutationObserver(() => setDark(html.classList.contains("dark")));
+    obs.observe(html, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
   const toggle = () => {
-    const next = !dark;
-    document.documentElement.classList.toggle("dark", next);
-    try {
-      localStorage.setItem("theme", next ? "dark" : "light"); // read raw by index.html before paint
-    } catch {
-      /* storage unavailable */
-    }
-    setDark(next);
+    const next = dark ? "light" : "dark";
+    applyTheme(next);
+    account.updatePreferences({ theme: next }).catch(() => {}); // follows you to other devices
   };
   return { dark, toggle };
 }
@@ -130,7 +134,7 @@ function SpoilerControl({
   );
 }
 
-export default function App({ user, onSignOut }: { user: User; onSignOut: (everywhere?: boolean) => void }) {
+export default function App({ user, onUser, onSignOut }: { user: User; onUser: (u: User) => void; onSignOut: (everywhere?: boolean) => void }) {
   const { dark, toggle } = useTheme();
   const [route, navigate] = useRoute();
   const [books, setBooks] = useState<Book[]>([]);
@@ -356,6 +360,7 @@ export default function App({ user, onSignOut }: { user: User; onSignOut: (every
       onToggleTheme={toggle}
       user={user}
       onSignOut={onSignOut}
+      onNavigateAccount={navigate}
       onClose={inDrawer ? () => setDrawer(false) : undefined}
     />
   );
@@ -421,6 +426,8 @@ export default function App({ user, onSignOut }: { user: User; onSignOut: (every
               {route.page === "discover" && <Discover books={books} onAdded={(b) => setBooks((bs) => [b, ...bs])} />}
               {route.page === "search" && <LibrarySearch books={books} onOpenPassage={openPassage} />}
               {route.page === "stats" && <StatsPage onOpenBook={(id) => navigate(`#/book/${id}`)} />}
+              {route.page === "settings" && <SettingsPage user={user} onUser={onUser} onSignOut={onSignOut} />}
+              {route.page === "admin" && (user.is_admin ? <AdminPage /> : <p className="p-6 text-center text-stone-500">This page doesn't exist.</p>)}
               {route.page === "library" && loaded && (
                 <Library
                   books={books}

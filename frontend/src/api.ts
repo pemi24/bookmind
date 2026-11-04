@@ -35,6 +35,7 @@ import type {
   Style,
   SummaryResult,
   TimelineEvent,
+  Theme,
   TranslationState,
   User,
 } from "./types";
@@ -104,6 +105,57 @@ export const auth = {
   reset: (token: string, password: string) => request<{ ok: boolean }>("/api/auth/reset", json("POST", { token, password })),
   verify: (token: string) => request<{ ok: boolean }>("/api/auth/verify", json("POST", { token })),
   resendVerification: (email: string) => request<{ ok: boolean }>("/api/auth/resend-verification", json("POST", { email })),
+};
+
+export interface DeviceSession {
+  id: number;
+  current: boolean;
+  user_agent: string | null;
+  ip: string | null;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface AiOptions {
+  server_default: { name: string; model: string };
+  providers: { name: string; default_model: string; local: boolean; available: boolean }[];
+}
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  display_name: string;
+  is_admin: boolean;
+  is_active: boolean;
+  email_verified: boolean;
+  has_password: boolean;
+  created_at: string | null;
+  last_seen_at: string | null;
+  books: number;
+  storage_bytes: number;
+  chats: number;
+  is_me: boolean;
+}
+
+export const account = {
+  updateProfile: (display_name: string) => request<{ user: User }>("/api/account/profile", json("PATCH", { display_name })),
+  updatePreferences: (prefs: { theme?: Theme; llm_provider?: string; llm_model?: string }) =>
+    request<{ user: User }>("/api/account/preferences", json("PATCH", prefs)),
+  aiOptions: () => request<AiOptions>("/api/account/ai-options"),
+  changeEmail: (email: string, password: string) => request<{ user: User }>("/api/account/email", json("POST", { email, password })),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ ok: boolean }>("/api/account/password", json("POST", { current_password, new_password })),
+  sessions: () => request<DeviceSession[]>("/api/account/sessions"),
+  endSession: (id: number) => request<void>(`/api/account/sessions/${id}`, { method: "DELETE" }),
+  exportUrl: "/api/account/export",
+  deleteAccount: (password: string) => request<{ ok: boolean }>("/api/account/delete", json("POST", { password })),
+};
+
+export const admin = {
+  users: () => request<AdminUser[]>("/api/admin/users"),
+  updateUser: (id: number, change: { is_active?: boolean; is_admin?: boolean }) =>
+    request<{ id: number; is_active: boolean; is_admin: boolean }>(`/api/admin/users/${id}`, json("PATCH", change)),
+  deleteUser: (id: number) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
 };
 
 export const api = {

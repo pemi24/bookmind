@@ -11,7 +11,7 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from app.llm.errors import LLMError
-from app.llm.providers import LLMProvider, ProviderStatus, get_provider
+from app.llm.providers import LLMProvider, ProviderStatus, current_provider
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -20,7 +20,7 @@ __all__ = ["LLMError", "complete_json", "complete_text", "llm_configured", "not_
 
 
 def provider() -> LLMProvider:
-    return get_provider()
+    return current_provider()
 
 
 def llm_configured() -> bool:

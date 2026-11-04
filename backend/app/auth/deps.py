@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import sessions
 from app.db.models import User, UserSession
 from app.db.session import get_db
+from app.llm.providers import choice_from_settings, user_choice
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 APP_HEADER = "x-requested-with"  # anonymous changing requests (sign in, sign up...) must send "BookMind"
@@ -22,6 +23,7 @@ async def current_session(request: Request, db: AsyncSession = Depends(get_db)) 
     if request.method not in SAFE_METHODS and not sessions.csrf_ok(sess, request):
         raise HTTPException(403, "Your session token is missing or out of date. Reload the page and try again.")
     request.state.user_id = user.id
+    user_choice.set(choice_from_settings(user.settings))
     return sess, user
 
 

@@ -5,7 +5,8 @@
    │  REST (JSON)  ·  SSE: indexing progress, streamed answers
    ▼
  FastAPI (async, single process)               PostgreSQL 16+ (native) + pgvector
-   ├─ api/books.py   upload, library, reader  ─┐   books, chapters, chunks(vector + tsvector)
+   ├─ auth/, api/auth.py  accounts, sessions  ─┐   users, sessions, auth_tokens
+   ├─ api/books.py   upload, library, reader   │   books, chapters, chunks(vector + tsvector)
    ├─ api/chat.py    grounded chat (SSE)       ├─▶ conversations, messages, citations
    ├─ ingestion/     background indexing task  │   notes, summaries, quizzes, flashcards
    ├─ retrieval/     hybrid search + rerank    │   entities, relations, timeline_events
@@ -134,3 +135,32 @@ To add a provider: subclass `LLMProvider` in `app/llm/providers/`, implement `st
 | Side-by-side translation | `features/translate.py`, table `translations` (migration 0004) | Background job per (chapter, language); paragraphs (`text.split("\n\n")`, the reader's split) are translated in numbered batches and stored aligned; missing ones are retried singly, else kept in the original. |
 | Reading stats | `features/stats.py`, table `activity_days` | The reader reports active reading time in 15 s ticks (visible page, input in the last 2 min); flashcard reviews are counted per day. Streak = consecutive days with ≥1 min of reading or any review. |
 | Install on a phone | `frontend/public/` (manifest, `sw.js`, icons), `main.py` (serves `frontend/dist`) | `start.bat lan` / `./start.sh --lan` build the app and bind to `0.0.0.0`; the backend serves the built app with an SPA fallback. The service worker caches only the app shell, never `/api`. |
+
+## Accounts and data isolation (`app/auth/`, `api/auth.py`, `api/account.py`, `api/admin.py`)
+
+* **Users and sessions** (migration 0005): `users` (argon2 password hash, `settings` JSONB for theme
+  and AI choice), `sessions` (SHA-256 of a random token, plus the SHA-256 of a CSRF token) and
+  `auth_tokens` (single-use reset / verification links, also stored hashed). The browser gets two
+  cookies: `bm_session` (HttpOnly, SameSite=Lax) and `bm_csrf`, which the app echoes in an
+  `X-CSRF-Token` header on every POST/PUT/PATCH/DELETE. Signed-out POSTs (sign-in, sign-up, reset)
+  must carry `X-Requested-With: BookMind`, which a cross-site form can't add.
+* **Every route** except `/api/health` and `/api/auth/*` depends on `auth.deps.current_user`
+  (routers declare it in `dependencies=`). Ownership checks live in `auth/scope.py` and answer 404,
+  never 403, for anything that isn't yours.
+* **Ownership in the schema**: `books`, `conversations`, `notes`, `quizzes`, `flashcards`,
+  `entities` and `timeline_events` have `user_id` (NOT NULL from migration 0006, ON DELETE
+  CASCADE); everything else is owned through its book. A `bookmind_set_owner` trigger fills the
+  owner of child rows from their book and rejects a mismatch, so background jobs can't create
+  rows with the wrong owner.
+* **Retrieval** takes a required `user_id` and adds `book_id IN (the user's books)` to the vector
+  and full-text SQL, so another account's passages are never even candidates.
+* **AI choice per account**: `auth.deps` puts the user's provider/model in a context variable that
+  `llm.providers.current_provider()` reads; background jobs started by a request inherit it. The
+  server's `LLM_FALLBACKS` chain still sits behind the user's choice.
+* **Files**: uploads go to `data/uploads/user-<id>/`; deleting an account removes its rows (cascade)
+  and its files.
+* **Abuse limits**: in-memory sliding-window rate limits per IP and per email (`auth/ratelimit.py`),
+  a short database-backed lockout after repeated failures, `MAX_BOOKS_PER_USER` and
+  `DAILY_MESSAGE_LIMIT`.
+* **Upgrading**: migration 0005 creates the admin from `ADMIN_EMAIL` and gives it all existing data;
+  `scripts/create_admin.py` sets its password. Both migrations downgrade cleanly.

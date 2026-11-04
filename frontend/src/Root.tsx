@@ -4,6 +4,7 @@ import { ApiError, auth, setSignedOutHandler } from "./api";
 import App from "./App";
 import AuthScreen, { authViewFromHash, VerifyEmail } from "./components/AuthScreen";
 import type { User } from "./types";
+import { applyTheme } from "./utils";
 
 /** Signed in → the app; signed out → the landing page with sign-in. Also handles email links. */
 export default function Root() {
@@ -14,11 +15,17 @@ export default function Root() {
     return view === "verify" ? token : null;
   });
 
+  // The account's theme wins over this browser's (it may have been changed on another device).
+  const signedInAs = (u: User) => {
+    if (u.settings.theme) applyTheme(u.settings.theme);
+    setUser(u);
+  };
+
   const check = useCallback(() => {
     setError(null);
     auth
       .me()
-      .then((r) => setUser(r.user))
+      .then((r) => signedInAs(r.user))
       .catch((e: ApiError) => (e.status === 401 ? setUser(null) : setError(e.message)));
   }, []);
 
@@ -31,12 +38,14 @@ export default function Root() {
 
   const signedIn = (u: User) => {
     window.location.hash = "#/";
-    setUser(u);
+    signedInAs(u);
   };
 
   const signOut = async (everywhere = false) => {
     try {
       await (everywhere ? auth.logoutAll() : auth.logout());
+    } catch {
+      /* already signed out (e.g. the account was just deleted) */
     } finally {
       window.location.hash = "#/";
       setUser(null);
@@ -77,7 +86,7 @@ export default function Root() {
     );
   if (user === null) return <AuthScreen onSignedIn={signedIn} />;
   // keyed by user: nothing from one account's session survives into the next
-  return <App key={user.id} user={user} onSignOut={signOut} />;
+  return <App key={user.id} user={user} onUser={setUser} onSignOut={signOut} />;
 }
 
 function Centered({ children }: { children: React.ReactNode }) {

@@ -1,10 +1,10 @@
-import { AlertTriangle, BarChart3, BookOpen, ChevronUp, Compass, Library as LibraryIcon, Loader2, LogOut, MonitorSmartphone, Moon, Search, Smartphone, Sun, Upload, X } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, ChevronUp, Compass, Library as LibraryIcon, Loader2, LogOut, MonitorSmartphone, Moon, Settings, ShieldCheck, Search, Smartphone, Sun, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Book, User } from "../types";
 import { isIndexing } from "../utils";
 import PhoneAccess from "./PhoneAccess";
 
-export type Page = "library" | "discover" | "search" | "stats";
+export type Page = "library" | "discover" | "search" | "stats" | "settings" | "admin";
 
 const NAV: { page: Page; label: string; icon: typeof LibraryIcon; hash: string }[] = [
   { page: "library", label: "Library", icon: LibraryIcon, hash: "#/" },
@@ -24,6 +24,7 @@ export default function Sidebar({
   onToggleTheme,
   user,
   onSignOut,
+  onNavigateAccount,
   onClose,
 }: {
   books: Book[];
@@ -37,6 +38,7 @@ export default function Sidebar({
   onToggleTheme: () => void;
   user: User;
   onSignOut: (everywhere?: boolean) => void;
+  onNavigateAccount: (hash: string) => void;
   onClose?: () => void; // shown in the mobile drawer
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -127,7 +129,7 @@ export default function Sidebar({
         >
           <Smartphone size={16} /> Use on your phone
         </button>
-        <UserMenu user={user} onSignOut={onSignOut} />
+        <UserMenu user={user} onSignOut={onSignOut} onNavigate={onNavigateAccount} />
       </div>
       {phone && <PhoneAccess onClose={() => setPhone(false)} />}
     </nav>
@@ -140,7 +142,7 @@ function initials(user: User): string {
 }
 
 /** Who is signed in, with sign-out (here, or on every device). */
-function UserMenu({ user, onSignOut }: { user: User; onSignOut: (everywhere?: boolean) => void }) {
+function UserMenu({ user, onSignOut, onNavigate }: { user: User; onSignOut: (everywhere?: boolean) => void; onNavigate: (hash: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -163,6 +165,15 @@ function UserMenu({ user, onSignOut }: { user: User; onSignOut: (everywhere?: bo
             Signed in as
             <div className="truncate text-sm font-medium text-stone-800 dark:text-stone-100">{user.email}</div>
           </div>
+          <button role="menuitem" onClick={() => (setOpen(false), onNavigate("#/settings"))} className={item}>
+            <Settings size={15} /> Settings
+          </button>
+          {user.is_admin && (
+            <button role="menuitem" onClick={() => (setOpen(false), onNavigate("#/admin"))} className={item}>
+              <ShieldCheck size={15} /> Admin
+            </button>
+          )}
+          <div className="my-1 border-t border-stone-200 dark:border-stone-700" />
           <button role="menuitem" onClick={() => onSignOut(false)} className={item}>
             <LogOut size={15} /> Sign out
           </button>

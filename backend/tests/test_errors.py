@@ -95,7 +95,7 @@ async def test_llm_unreachable_gives_clear_chat_error_and_health_status(client, 
 
     # Point the provider at a port where nothing listens.
     dead = OllamaProvider(get_settings().model_copy(update={"ollama_host": "http://127.0.0.1:9"}))
-    monkeypatch.setattr(llm, "get_provider", lambda: dead)
+    monkeypatch.setattr(llm, "current_provider", lambda: dead)
     monkeypatch.setattr(main, "_llm_cache", {"at": 0.0, "status": None})
 
     r = await client.post(f"/api/books/{book['id']}/chat", json={"message": "Where is the brass key?"})

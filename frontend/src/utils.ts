@@ -86,3 +86,15 @@ export type Spoiler = number | "follow" | null;
 export function spoilerLimit(book: Book, setting: Spoiler = loadPref<Spoiler>(`spoiler:${book.id}`, null)): number | null {
   return setting === "follow" ? (book.reading?.furthest ?? 1) : setting;
 }
+
+/** Light, dark, or follow the device. Remembered in this browser too, so the page paints right away. */
+export function applyTheme(theme: "system" | "light" | "dark"): void {
+  const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.classList.toggle("dark", dark);
+  try {
+    if (theme === "system") localStorage.removeItem("theme");
+    else localStorage.setItem("theme", theme); // read raw by index.html before paint
+  } catch {
+    /* storage unavailable */
+  }
+}

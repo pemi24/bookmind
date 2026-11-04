@@ -15,6 +15,11 @@ a reader with the passage highlighted.
 How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 **Features**
+* **Accounts** — sign up with an email and password; every account has its own private library
+  (books, chats, notes, quizzes, stats). Password reset, optional email verification, "sign out
+  everywhere", a **Settings** page (name, email, password, theme, which AI to use), **download all
+  your data** as a zip, and **delete your account**. An **Admin** page lists accounts and their
+  usage (never their content).
 * **Library** — upload several books (drag and drop), live indexing progress, re-index, delete.
 * **Find free books** — search **Project Gutenberg**, **Standard Ebooks** (carefully edited editions)
   and **Internet Archive** at once and add a book in a click; results are labelled by source and
@@ -34,7 +39,7 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * **Answer styles** — normal, ELI5, student, expert, analogy.
 * **Spoiler guard** — "I've read up to chapter N", or **Follow my reading** to track the furthest
   chapter you've actually read in the reader; enforced in every database query.
-* **Talk to a character** (fiction) and **compare books** (citations from each book).
+* **Talk to a character** (any book: a novel's hero, a figure from history or scripture) and **compare books** (citations from each book).
 * **Summaries** — short / medium / detailed, per chapter or whole book.
 * **Study** — generated quizzes (multiple choice, true/false, short answer) with scoring,
   explanations and source links; flashcards with spaced repetition (SM-2), **exportable to Anki**.
@@ -254,7 +259,37 @@ opens the browser):
 * Windows: double-click **`start.bat`** (or run it from a terminal)
 * macOS / Linux: `./start.sh` (run `chmod +x start.sh` once)
 
-Then open http://localhost:5173 and upload `samples/alice-in-wonderland.txt`.
+Then open http://localhost:5173, **create an account**, and upload `samples/alice-in-wonderland.txt`.
+
+### Accounts and signing in
+
+* **New install**: the first page is the sign-in page. Click **Create an account**; each account
+  gets its own empty library.
+* **Upgrading from a version without accounts**: everything you already had (books, chats, notes…)
+  now belongs to the account `ADMIN_EMAIL` (default `admin@localhost`), which has no password yet.
+  Set one, then sign in with it and change the email in **Settings** if you like:
+  ```bash
+  cd backend
+  python scripts/create_admin.py                    # asks for the password twice
+  python scripts/create_admin.py you@example.com    # or create / promote another address
+  ```
+  The same command fixes a forgotten admin password.
+* **Forgot password**: by default BookMind doesn't send email. Click **Forgot password?**, and the
+  reset link is printed in the backend's terminal window (look for the `EMAIL (dev mode…)` box).
+  To really send email, set `EMAIL_BACKEND=smtp` and the `SMTP_…` settings (see `.env.example`).
+* **Your account** (menu at the bottom of the sidebar → **Settings**): name, email, password, light
+  / dark theme, which AI provider and model answer *your* questions (from those the server has keys
+  for; the server's backups still apply), signed-in devices, **Download my data**, **Delete account**.
+* **Admin** (same menu, admins only): every account with its number of books, storage and chats;
+  suspend, reactivate, make admin, delete. Admins can't open other people's books or chats.
+* **Limits** per account: `MAX_BOOKS_PER_USER` (50), `DAILY_MESSAGE_LIMIT` (300 questions per 24 h),
+  `MAX_UPLOAD_MB` per file. Set any of them to 0 for no limit.
+* **Security**: passwords are hashed with argon2; sessions live in PostgreSQL and the browser only
+  holds a random token in an HttpOnly cookie (nothing in localStorage), with a CSRF token on every
+  change. Repeated wrong passwords are rate-limited and briefly lock the account, and sign-in
+  never reveals whether an email has an account. Every query is filtered by the signed-in account
+  (other people's items simply don't exist: 404), including the vector and full-text search
+  itself, and each account's files are stored in its own folder (`data/uploads/user-<id>/`).
 
 ### On your phone (iPhone / Android)
 
@@ -269,8 +304,9 @@ BookMind still runs on your computer; the phone just opens it over your home Wi-
 3. Open BookMind from the home-screen icon; it runs full screen like an app.
 
 Notes: the first time, Windows asks whether Python may use the network — allow it for **private
-networks**. Anyone on the same Wi-Fi can open your library while LAN mode runs, so only use it on
-a network you trust. Browsers only enable offline caching (the service worker) over HTTPS or on
+networks**. Anyone on the same Wi-Fi can open BookMind and create an account while LAN mode runs
+(they can't see your library, but they can use your AI quota), so only use it on a network you
+trust. After an update, refresh the page once on the phone to get the new version. Browsers only enable offline caching (the service worker) over HTTPS or on
 the computer itself; over plain `http://` the home-screen app works but needs the computer to be on.
 
 ### Manual steps (what the scripts do)
@@ -314,7 +350,11 @@ The test suite needs no AI model, API key or network: features are tested with a
 fake model, and the Ollama/Gemini providers against mocked HTTP. It covers parsing (TXT, EPUB,
 DOCX, Markdown, PDF headers/footers), chunking, hybrid retrieval and the spoiler guard, every
 feature endpoint, JSON validation and retries, and error handling (corrupt or scanned files,
-oversized uploads, database down, AI model unreachable). `stress_large_book.py` runs against
+oversized uploads, database down, AI model unreachable). Accounts are covered too: sign-up and
+sign-in rules, sessions, CSRF, rate limits and lockout, password reset and email verification,
+settings, export and account deletion, the admin page, per-account limits, and isolation (a second
+account gets 404 from every endpoint for the first account's books, chats, notes and files, and
+search never returns another account's passages). `stress_large_book.py` runs against
 the running backend (start it first); the test book is deleted afterwards.
 
 ---
@@ -323,6 +363,11 @@ the running backend (start it first); the test book is deleted afterwards.
 
 | Symptom | Fix |
 |---|---|
+| Can't sign in after upgrading (your books "disappeared") | They belong to the admin account. Run `python scripts/create_admin.py` in `backend` to give `admin@localhost` a password, then sign in with it. |
+| Forgot your password | **Forgot password?** on the sign-in page; the link appears in the backend's terminal unless SMTP is set up. Admins can also run `python scripts/create_admin.py your@email`. |
+| "Too many failed sign-in attempts" | Wait up to 15 minutes, then try again (or use **Forgot password?**). |
+| "Your session token is missing or out of date" | Reload the page. If it keeps happening, sign out and in again. |
+| The phone shows the old version / no sign-in page | Refresh the page once (the installed app caches the previous version). |
 | `password authentication failed for user` | Wrong password in `DATABASE_URL`, or special characters not URL-encoded. |
 | `fe_sendauth: no password supplied` | `DATABASE_URL` has no password; add one. |
 | `connection refused` / `could not connect to server` | PostgreSQL isn't running. Windows: `services.msc` → `postgresql-x64-NN` → Start. macOS: `brew services start postgresql@17`. Linux: `sudo systemctl start postgresql`. Check the port (`port` in `postgresql.conf`). |

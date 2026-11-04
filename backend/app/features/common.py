@@ -9,17 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Book, Chapter, Chunk
-from app.llm.providers import get_provider
+from app.llm.providers import current_provider
 
 
 def max_input_chars() -> int:
     """Book text per LLM request; depends on the model's context window (small for local models)."""
-    return get_provider().max_input_chars
+    return current_provider().max_input_chars
 
 
 def parallel_requests() -> int:
     """Concurrent LLM requests for background jobs (a local model handles one at a time)."""
-    return 1 if get_provider().local else 3
+    return 1 if current_provider().local else 3
 
 
 _QUOTES = str.maketrans({"“": '"', "”": '"', "„": '"', "‘": "'", "’": "'", "‚": "'", "–": "-", "—": "-"})

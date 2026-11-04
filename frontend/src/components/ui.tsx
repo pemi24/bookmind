@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChapterInfo, Job } from "../types";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "destructive";
 
 const VARIANTS: Record<Variant, string> = {
   primary: "bg-brand-600 text-white hover:bg-brand-700",
@@ -12,6 +12,7 @@ const VARIANTS: Record<Variant, string> = {
     "border border-stone-300 bg-white text-stone-700 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-200 dark:hover:bg-stone-800",
   ghost: "text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800",
   danger: "text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40",
+  destructive: "bg-red-600 text-white hover:bg-red-700",
 };
 
 export function buttonClasses(variant: Variant = "secondary"): string {
