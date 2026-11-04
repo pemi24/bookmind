@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import type { Book, ChapterInfo, Job, NewNote, PassageLoc } from "./types";
+import type { Book, ChapterInfo, Job, NewNote, PassageLoc, User } from "./types";
 
 /** Everything a feature panel needs about the open book. */
 export interface Workspace {
@@ -12,6 +12,8 @@ export interface Workspace {
   openPassage: (loc: PassageLoc) => void;
   saveNote: (note: NewNote) => Promise<void>;
   notify: (msg: string) => void;
+  /** The signed-in user (their listening preferences, for one). */
+  user: User;
 }
 
 export const WorkspaceContext = createContext<Workspace | null>(null);

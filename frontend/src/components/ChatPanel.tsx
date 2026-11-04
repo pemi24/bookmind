@@ -1,6 +1,7 @@
-import { BookmarkPlus, BookOpen, Copy, History, Mic, MicOff, Pencil, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2, VolumeX } from "lucide-react";
+import { BookmarkPlus, BookOpen, Copy, History, Loader2, Mic, MicOff, Pause, Pencil, Play, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamChat } from "../api";
+import { useReplyPlayer, type ReplyPlayback } from "../audio/useReplyPlayer";
 import type { ChatMessage, ConversationSummary, Source, Style } from "../types";
 import { useWorkspace } from "../workspace";
 import AnswerMarkdown, { stripCitations } from "./AnswerMarkdown";
@@ -20,7 +21,6 @@ type Mode = "ask" | "persona" | "compare";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const SpeechRecognitionImpl: any =
   typeof window !== "undefined" ? (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition : undefined;
-const canSpeak = typeof window !== "undefined" && "speechSynthesis" in window;
 
 function plainText(markdown: string): string {
   return markdown.replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, "").replace(/[*_#>`]/g, "").replace(/\s+/g, " ").trim();
@@ -88,6 +88,45 @@ function sourceCount(m: ChatMessage): number {
   return NOT_FOUND.test(m.content) ? 0 : Math.min(m.sources.length, 3);
 }
 
+const replyAction = "flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800";
+
+/** Listen to a reply: play/pause, stop, and how far it has got. */
+function ReplyAudio({ playback, onListen, onStop }: { playback: ReplyPlayback | null; onListen: () => void; onStop: () => void }) {
+  if (!playback)
+    return (
+      <button onClick={onListen} className={replyAction} title="Read this answer aloud">
+        <Volume2 size={14} /> Listen
+      </button>
+    );
+  const { status, index, total, notice, error } = playback;
+  const busy = status === "loading";
+  const playing = status === "playing" || busy;
+  const done = status === "ended";
+  const progress = total ? Math.min(1, (done ? total : index + (playing && !busy ? 0.5 : 0)) / total) : 0;
+  return (
+    <div className="flex basis-full flex-col gap-1 sm:basis-auto">
+      <div className="flex items-center gap-1" role="group" aria-label="Listening">
+        <button onClick={onListen} className={`${replyAction} font-medium text-brand-700 dark:text-brand-300`} title={playing ? "Pause (keeps your place)" : done ? "Listen again" : "Resume"}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : playing ? <Pause size={14} /> : <Play size={14} />}
+          {busy ? (index === 0 ? "Preparing…" : "Loading…") : playing ? "Pause" : done ? "Again" : "Resume"}
+        </button>
+        <button onClick={onStop} className={replyAction} title="Stop reading">
+          <Square size={13} /> Stop
+        </button>
+        {total > 0 && (
+          <span className="flex items-center gap-1.5 px-1 text-xs text-stone-400 tabular-nums" aria-live="off">
+            <span className="h-1 w-16 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-700">
+              <span className="block h-full bg-brand-500 transition-all" style={{ width: `${progress * 100}%` }} />
+            </span>
+            {done ? "Done" : `${Math.min(index + 1, total)}/${total}`}
+          </span>
+        )}
+      </div>
+      {(error || notice) && <p className={`px-2 text-xs ${error ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}>{error ?? notice}</p>}
+    </div>
+  );
+}
+
 function SourceList({ sources, cited, answer, onCite }: { sources: Source[]; cited: number[]; answer: string; onCite: (s: Source) => void }) {
   // Small local models sometimes forget the [n] markers: still show what the answer was based on.
   const fallback = cited.length === 0 && !NOT_FOUND.test(answer);
@@ -116,7 +155,7 @@ function SourceList({ sources, cited, answer, onCite }: { sources: Source[]; cit
 }
 
 export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
-  const { book, books, maxChapter, saveNote, notify } = useWorkspace();
+  const { book, books, maxChapter, saveNote, notify, user } = useWorkspace();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -129,7 +168,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [listening, setListening] = useState(false);
-  const [speaking, setSpeaking] = useState<number | null>(null);
+  const { playback, listen, stop: stopListening, autoRead } = useReplyPlayer(user);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [citesShown, setCitesShown] = useState<Set<number>>(new Set()); // answers whose sources are visible
   const [greetingSeed, setGreetingSeed] = useState(0); // new chat -> new greeting
@@ -158,6 +197,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
 
   useEffect(() => {
     abortRef.current?.abort();
+    stopListening();
     setConversationId(null);
     setMessages([]);
     setCitesShown(new Set());
@@ -166,7 +206,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     setCompareIds([]);
     setPersona("");
     loadConversations();
-  }, [book.id, loadConversations]);
+  }, [book.id, loadConversations, stopListening]);
 
   // Character names for persona mode (if the book has been analyzed), within the spoiler limit.
   useEffect(() => {
@@ -182,13 +222,24 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
 
   useEffect(() => () => {
     abortRef.current?.abort();
-    if (canSpeak) window.speechSynthesis.cancel();
     recRef.current?.stop();
   }, []);
+
+  // Auto-read: a reply that has just finished arriving starts playing (not ones loaded from history).
+  const lastPending = useRef(false);
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    const wasPending = lastPending.current;
+    lastPending.current = !!(last?.role === "assistant" && last.pending);
+    if (autoRead && wasPending && last?.role === "assistant" && !last.pending && last.content && !last.error) {
+      void listen(messages.length - 1, last.content);
+    }
+  }, [messages, autoRead, listen]);
 
   const openConversation = async (id: number) => {
     setShowHistory(false);
     abortRef.current?.abort();
+    stopListening();
     const c = await api.conversation(id);
     setConversationId(id);
     setMessages(c.messages);
@@ -201,6 +252,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
 
   const newConversation = () => {
     abortRef.current?.abort();
+    stopListening();
     setConversationId(null);
     setMessages([]);
     setCitesShown(new Set());
@@ -279,6 +331,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
 
   const stop = () => {
     abortRef.current?.abort();
+    lastPending.current = false; // a reply cut short isn't read aloud automatically
     updateLast((m) => ({ ...m, pending: false, error: m.content ? undefined : "Stopped." }));
     setBusy(false);
   };
@@ -333,17 +386,6 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     setListening(true);
   };
 
-  const speak = (i: number, text: string) => {
-    window.speechSynthesis.cancel();
-    if (speaking === i) {
-      setSpeaking(null);
-      return;
-    }
-    const u = new SpeechSynthesisUtterance(plainText(text));
-    u.onend = () => setSpeaking((s) => (s === i ? null : s));
-    setSpeaking(i);
-    window.speechSynthesis.speak(u);
-  };
 
   const saveAnswer = (i: number, m: ChatMessage) => {
     const question = messages[i - 1]?.role === "user" ? messages[i - 1].content : undefined;
@@ -626,11 +668,11 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
                     <button onClick={() => navigator.clipboard.writeText(plainText(m.content)).then(() => notify("Answer copied."))} className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800" title="Copy">
                       <Copy size={14} /> Copy
                     </button>
-                    {canSpeak && (
-                      <button onClick={() => speak(i, m.content)} className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800" title={speaking === i ? "Stop reading" : "Read aloud"}>
-                        {speaking === i ? <VolumeX size={14} /> : <Volume2 size={14} />} {speaking === i ? "Stop" : "Listen"}
-                      </button>
-                    )}
+                    <ReplyAudio
+                      playback={playback?.message === i ? playback : null}
+                      onListen={() => listen(i, m.content)}
+                      onStop={stopListening}
+                    />
                       </>
                     )}
                   </div>
