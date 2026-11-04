@@ -283,10 +283,30 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
     setBusy(false);
   };
 
-  const deleteConversation = async (id: number) => {
-    await api.deleteConversation(id);
-    if (id === conversationId) newConversation();
+  const deleteConversation = async (c: ConversationSummary) => {
+    if (!confirm(`Delete the chat “${c.title}”? This cannot be undone.`)) return;
+    try {
+      await api.deleteConversation(c.id);
+      if (c.id === conversationId) newConversation();
+    } catch (e) {
+      notify((e as Error).message);
+    }
     loadConversations();
+  };
+
+  const [renaming, setRenaming] = useState<{ id: number; title: string } | null>(null);
+  const saveRename = async () => {
+    if (!renaming) return;
+    const title = renaming.title.trim();
+    setRenaming(null);
+    if (!title) return;
+    setConversations((cs) => cs.map((c) => (c.id === renaming.id ? { ...c, title } : c)));
+    try {
+      await api.renameConversation(renaming.id, title.slice(0, 120));
+    } catch (e) {
+      notify((e as Error).message);
+      loadConversations();
+    }
   };
 
   const toggleMic = () => {
@@ -362,7 +382,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
           label="Chat mode"
           options={[
             { value: "ask", label: "Ask the book" },
-            ...(book.is_fiction !== false ? [{ value: "persona" as Mode, label: "Talk to a character" }] : []),
+            { value: "persona" as Mode, label: "Talk to a character" }, // people in non-fiction count too (a Bible, a biography)
             ...(others.length ? [{ value: "compare" as Mode, label: "Compare books" }] : []),
           ]}
         />
@@ -416,12 +436,34 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
           <div className="absolute top-full left-2 z-20 mt-1 max-h-80 w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-700 dark:bg-stone-900">
             {conversations.length === 0 && <p className="p-3 text-sm text-stone-500">No saved conversations yet.</p>}
             {conversations.map((c) => (
-              <div key={c.id} className={`group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-stone-100 dark:hover:bg-stone-800 ${c.id === conversationId ? "bg-stone-100 dark:bg-stone-800" : ""}`}>
-                <button className="min-w-0 flex-1 truncate text-left" onClick={() => openConversation(c.id)}>
-                  {c.mode === "persona" ? `🎭 ${c.persona}: ` : c.mode === "compare" ? "⚖️ " : ""}
-                  {c.title}
+              <div key={c.id} className={`group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm hover:bg-stone-100 dark:hover:bg-stone-800 ${c.id === conversationId ? "bg-stone-100 dark:bg-stone-800" : ""}`}>
+                {renaming?.id === c.id ? (
+                  <input
+                    autoFocus
+                    value={renaming.title}
+                    maxLength={120}
+                    onChange={(e) => setRenaming({ id: c.id, title: e.target.value })}
+                    onBlur={saveRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveRename();
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                    aria-label="Chat name"
+                    className="min-w-0 flex-1 rounded border border-brand-400 bg-transparent px-1.5 py-0.5 outline-none"
+                  />
+                ) : (
+                  <button className="min-w-0 flex-1 text-left" onClick={() => openConversation(c.id)}>
+                    <span className="block truncate">
+                      {c.mode === "persona" ? `🎭 ${c.persona}: ` : c.mode === "compare" ? "⚖️ " : ""}
+                      {c.title}
+                    </span>
+                    <span className="block text-xs text-stone-400">{new Date(c.updated_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
+                  </button>
+                )}
+                <button onClick={() => setRenaming({ id: c.id, title: c.title })} className="rounded p-1 text-stone-400 hover:text-stone-700 sm:opacity-0 sm:group-hover:opacity-100 dark:hover:text-stone-200" aria-label="Rename chat" title="Rename">
+                  <Pencil size={14} />
                 </button>
-                <button onClick={() => deleteConversation(c.id)} className="text-stone-400 opacity-0 group-hover:opacity-100 hover:text-red-600" aria-label="Delete conversation">
+                <button onClick={() => deleteConversation(c)} className="rounded p-1 text-stone-400 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100" aria-label="Delete chat" title="Delete">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -447,13 +489,13 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
               {maxChapter !== null && (
                 <p className="mt-3 text-sm text-stone-500">Spoiler guard is on: I'll only use chapters 1–{maxChapter}.</p>
               )}
-              <div className="mt-8 flex max-w-2xl flex-wrap justify-center gap-2">
+              <div className="mt-8 flex w-full max-w-3xl flex-wrap justify-center gap-2">
                 {starterQuestions(book.suggested_questions).map((q) => (
                   <button
                     key={q}
                     onClick={() => send(q)}
                     title={q}
-                    className="max-w-full truncate rounded-full border border-stone-200 bg-white px-3.5 py-1.5 text-sm text-stone-600 transition hover:border-brand-400 hover:text-stone-900 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300 dark:hover:text-stone-100 sm:max-w-[22rem]"
+                    className="max-w-[min(18rem,100%)] truncate rounded-full border border-stone-200 bg-white px-3.5 py-1.5 text-sm text-stone-600 transition hover:border-brand-400 hover:text-stone-900 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300 dark:hover:text-stone-100 sm:max-w-[min(22rem,100%)]"
                   >
                     {q}
                   </button>

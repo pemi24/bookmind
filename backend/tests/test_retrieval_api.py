@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+
+from tests.conftest import signed_in
 import pytest
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -65,7 +67,7 @@ async def test_upload_index_retrieve_spoiler_delete(test_db, tmp_path):
     from app.main import app
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as client:
+    async with signed_in(app) as client:
         files = {"file": ("lighthouse.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")}
         r = await client.post("/api/books", files=files)
         assert r.status_code == 201, r.text

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -11,6 +12,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import scope
+from app.auth.deps import CurrentUser, current_user
 from app.api.books import get_book_or_404
 from app.config import get_settings
 from app.db.models import Book, Chapter, Citation, Conversation, Message
@@ -23,7 +26,7 @@ from app.llm.prompts import query as query_prompts
 from app.retrieval.hybrid import Passage, search_book, search_books
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api", tags=["chat"])
+router = APIRouter(prefix="/api", tags=["chat"], dependencies=[Depends(current_user)])
 
 HISTORY_MESSAGES = 10
 # [1], [2, 3], [1-3] — and the "[Passage 1]" / "[source 2]" forms small models tend to write.
@@ -131,7 +134,7 @@ async def _overview(db: AsyncSession, book: Book, max_chapter: int | None) -> tu
 
 
 async def _search_again(book_id: int, book_title: str, question: str, max_chapter: int | None,
-                        seen: list[Passage]) -> list[Passage]:
+                        seen: list[Passage], *, user_id: int) -> list[Passage]:
     """Passages found with alternative queries, new ones first; [] if nothing new turned up."""
     try:
         out = await llm.complete_json(query_prompts.EXPAND_SYSTEM, query_prompts.build_expand(question, book_title),
@@ -144,7 +147,7 @@ async def _search_again(book_id: int, book_title: str, question: str, max_chapte
     found: dict[int, Passage] = {}
     async with SessionLocal() as sdb:
         for q in queries:
-            for p in await search_book(sdb, q, book_id, max_chapter=max_chapter, top_k=6):
+            for p in await search_book(sdb, q, book_id, max_chapter=max_chapter, top_k=6, user_id=user_id):
                 if p.chunk_id not in known:
                     found.setdefault(p.chunk_id, p)
     if not found:
@@ -154,11 +157,25 @@ async def _search_again(book_id: int, book_title: str, question: str, max_chapte
     return (new + seen)[:k]
 
 
+async def check_daily_messages(db: AsyncSession, user) -> None:
+    limit = get_settings().daily_message_limit
+    if not limit:
+        return
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    sent = await db.scalar(
+        select(func.count()).select_from(Message).join(Conversation, Conversation.id == Message.conversation_id)
+        .where(Conversation.user_id == user.id, Message.role == "user", Message.created_at >= since))
+    if sent >= limit:
+        raise HTTPException(429, f"You've reached today's limit of {limit} messages (DAILY_MESSAGE_LIMIT). "
+                                 "It frees up gradually over the next 24 hours.")
+
+
 @router.post("/books/{book_id}/chat")
-async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db)):
-    book = await get_book_or_404(db, book_id)
+async def chat(user: CurrentUser, book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db)):
+    book = await get_book_or_404(db, book_id, user)
     if book.status != "ready":
         raise HTTPException(409, "This book is still being indexed. Try again when it's ready.")
+    await check_daily_messages(db, user)
     if not llm.llm_configured():
         raise HTTPException(503, llm.not_configured_message())
     if req.style not in chat_prompts.STYLES:
@@ -166,7 +183,7 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
 
     compare_ids = [b for b in dict.fromkeys(req.compare_book_ids) if b != book_id]
     for bid in compare_ids:
-        other = await get_book_or_404(db, bid)
+        other = await get_book_or_404(db, bid, user)
         if other.status != "ready":
             raise HTTPException(409, f"'{other.title}' is not indexed yet.")
 
@@ -179,12 +196,12 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
         spoiler = (req.spoiler_chapter, title)
 
     if req.conversation_id:
-        conv = await db.get(Conversation, req.conversation_id)
-        if conv is None or conv.book_id != book_id:
+        conv = await scope.conversation(db, req.conversation_id, user)
+        if conv.book_id != book_id:
             raise HTTPException(404, "Conversation not found.")
     else:
         mode = "compare" if compare_ids else ("persona" if req.persona else "chat")
-        conv = Conversation(book_id=book_id, book_ids=[book_id, *compare_ids], mode=mode,
+        conv = Conversation(user_id=user.id, book_id=book_id, book_ids=[book_id, *compare_ids], mode=mode,
                             persona=req.persona, title=req.message.strip()[:120])
         db.add(conv)
         await db.flush()
@@ -201,7 +218,8 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
     history = await _history(db, conv.id)
     book_title, book_author = book.title, book.author
     starters = intent_prompts.starter_questions(book.suggested_questions or [])
-    compare_titles = [(await db.get(Book, b)).title for b in compare_ids]
+    compare_titles = [(await get_book_or_404(db, b, user)).title for b in compare_ids]
+    uid = user.id
     overview, has_memory = (None, False) if compare_ids else await _overview(db, book, req.spoiler_chapter)
     meta = {"style": req.style, "spoiler_chapter": req.spoiler_chapter, "persona": req.persona,
             "compare_book_ids": compare_ids}
@@ -234,7 +252,8 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
             if route.intent == "off_topic":
                 # Double-check against the book before refusing: a strong match means it's about the book.
                 async with SessionLocal() as sdb:
-                    checked = await search_book(sdb, req.message, book_id, max_chapter=req.spoiler_chapter)
+                    checked = await search_book(sdb, req.message, book_id, max_chapter=req.spoiler_chapter,
+                                                user_id=uid)
                 if checked and checked[0].score >= intent.OFF_TOPIC_MAX_RELEVANCE:
                     route = intent.Route("book_question", by="checked")
             if route.intent == "smalltalk":
@@ -261,9 +280,10 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
                 async with SessionLocal() as sdb:
                     if compare_ids:
                         passages = await search_books(sdb, query, [book_id, *compare_ids],
-                                                      {book_id: req.spoiler_chapter}, per_book_k=5)
+                                                      {book_id: req.spoiler_chapter}, per_book_k=5, user_id=uid)
                     else:
-                        passages = await search_book(sdb, query, book_id, max_chapter=req.spoiler_chapter)
+                        passages = await search_book(sdb, query, book_id, max_chapter=req.spoiler_chapter,
+                                                     user_id=uid)
             sources = [source_dict(i, p) for i, p in enumerate(passages, start=1)]
             yield sse("sources", {"query": query, "sources": sources})
             if not passages:
@@ -284,7 +304,8 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
             # (other names, the book's own vocabulary) and answer from what that finds.
             if chat_prompts.admits_gap(answer) and not compare_ids:
                 yield sse("status", {"stage": "searching_more"})
-                more = await _search_again(book_id, book_title, req.message, req.spoiler_chapter, passages)
+                more = await _search_again(book_id, book_title, req.message, req.spoiler_chapter, passages,
+                                           user_id=uid)
                 if more:
                     passages = more
                     sources = [source_dict(i, p) for i, p in enumerate(passages, start=1)]
@@ -322,19 +343,19 @@ async def chat(book_id: int, req: ChatRequest, db: AsyncSession = Depends(get_db
 
 
 @router.get("/books/{book_id}/conversations")
-async def list_conversations(book_id: int, db: AsyncSession = Depends(get_db)):
+async def list_conversations(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    await get_book_or_404(db, book_id, user)
     rows = (await db.execute(
-        select(Conversation).where(Conversation.book_id == book_id).order_by(Conversation.updated_at.desc())
+        select(Conversation).where(Conversation.book_id == book_id, Conversation.user_id == user.id)
+        .order_by(Conversation.updated_at.desc())
     )).scalars().all()
     return [{"id": c.id, "title": c.title, "mode": c.mode, "persona": c.persona, "book_ids": c.book_ids,
              "updated_at": c.updated_at.isoformat()} for c in rows]
 
 
 @router.get("/conversations/{conversation_id}")
-async def get_conversation(conversation_id: int, db: AsyncSession = Depends(get_db)):
-    conv = await db.get(Conversation, conversation_id)
-    if conv is None:
-        raise HTTPException(404, "Conversation not found.")
+async def get_conversation(user: CurrentUser, conversation_id: int, db: AsyncSession = Depends(get_db)):
+    conv = await scope.conversation(db, conversation_id, user)
     msgs = (await db.execute(
         select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id)
     )).scalars().all()
@@ -350,9 +371,23 @@ async def get_conversation(conversation_id: int, db: AsyncSession = Depends(get_
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
-async def delete_conversation(conversation_id: int, db: AsyncSession = Depends(get_db)):
-    conv = await db.get(Conversation, conversation_id)
-    if conv is None:
-        raise HTTPException(404, "Conversation not found.")
+async def delete_conversation(user: CurrentUser, conversation_id: int, db: AsyncSession = Depends(get_db)):
+    conv = await scope.conversation(db, conversation_id, user)
     await db.delete(conv)
     await db.commit()
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+
+
+@router.patch("/conversations/{conversation_id}")
+async def rename_conversation(user: CurrentUser, conversation_id: int, req: RenameRequest,
+                              db: AsyncSession = Depends(get_db)):
+    conv = await scope.conversation(db, conversation_id, user)
+    title = " ".join(req.title.split())[:120]
+    if not title:
+        raise HTTPException(422, "A chat name can't be empty.")
+    conv.title = title
+    await db.commit()
+    return {"id": conv.id, "title": conv.title}

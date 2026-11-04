@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.deps import CurrentUser, current_user
 from app.api.books import get_book_or_404
 from app.db.session import get_db
 from app.features import stats
 
-router = APIRouter(prefix="/api", tags=["stats"])
+router = APIRouter(prefix="/api", tags=["stats"], dependencies=[Depends(current_user)])
 
 
 class ReadingTime(BaseModel):
@@ -18,12 +19,12 @@ class ReadingTime(BaseModel):
 
 
 @router.post("/books/{book_id}/reading/time", status_code=204)
-async def add_reading_time(book_id: int, req: ReadingTime, db: AsyncSession = Depends(get_db)):
-    await get_book_or_404(db, book_id)
+async def add_reading_time(user: CurrentUser, book_id: int, req: ReadingTime, db: AsyncSession = Depends(get_db)):
+    await get_book_or_404(db, book_id, user)
     await stats.add_activity(db, book_id, seconds=req.seconds)
     await db.commit()
 
 
 @router.get("/stats")
-async def reading_stats(days: int = 30, db: AsyncSession = Depends(get_db)):
-    return await stats.compute(db, min(max(days, 7), 365))
+async def reading_stats(user: CurrentUser, days: int = 30, db: AsyncSession = Depends(get_db)):
+    return await stats.compute(db, user.id, min(max(days, 7), 365))

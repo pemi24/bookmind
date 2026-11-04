@@ -18,6 +18,7 @@ import re
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from urllib.parse import quote, urlparse
@@ -119,13 +120,14 @@ def search_name(text: str) -> str | None:
 
 # ---------------------------------------------------------------- downloads (shared)
 
-async def _download(candidates: list[tuple[str, str]], host_ok: Callable[[str], bool], label: str) -> tuple:
+async def _download(candidates: list[tuple[str, str]], host_ok: Callable[[str], bool], label: str,
+                    dest_dir: Path) -> tuple:
     """Try each (url, ext) in order; returns (path, size, ext). Stays within the source's own hosts."""
     s = get_settings()
     limit = s.max_upload_mb * 1024 * 1024
     last_status = 0
     for url, ext in candidates:
-        dest = s.upload_dir / f"{uuid.uuid4().hex}{ext}"
+        dest = dest_dir / f"{uuid.uuid4().hex}{ext}"
         size = 0
         try:
             async with _client() as c, c.stream("GET", url) as r:
@@ -197,14 +199,14 @@ async def _gutenberg_search(query: str, page: int) -> dict:
     return parse_search(await _get_text(f"{_gutenberg_base()}/ebooks/search.opds/", params, "Project Gutenberg"))
 
 
-async def _gutenberg_download(book_id: str) -> dict:
+async def _gutenberg_download(book_id: str, dest_dir: Path) -> dict:
     if not re.fullmatch(r"\d{1,7}", book_id):
         raise CatalogError("Not a Project Gutenberg book number.", 400)
     meta = parse_book(await _get_text(f"{_gutenberg_base()}/ebooks/{book_id}.opds", None, "Project Gutenberg"))
     base = _gutenberg_base()
     path, size, ext = await _download(
         [(f"{base}/ebooks/{book_id}.epub.noimages", ".epub"), (f"{base}/ebooks/{book_id}.txt.utf-8", ".txt")],
-        lambda h: h in _GUTENBERG_HOSTS, "Project Gutenberg")
+        lambda h: h in _GUTENBERG_HOSTS, "Project Gutenberg", dest_dir)
     return {**meta, "path": path, "size": size, "ext": ext}
 
 
@@ -242,12 +244,12 @@ def standard_epub_url(book_id: str) -> str:
     return f"{_SE}/ebooks/{book_id}/downloads/{book_id.replace('/', '_')}.epub?source=feed"
 
 
-async def _standard_download(book_id: str) -> dict:
+async def _standard_download(book_id: str, dest_dir: Path) -> dict:
     if not _SE_ID.fullmatch(book_id):
         raise CatalogError("Not a Standard Ebooks book.", 400)
     path, size, ext = await _download([(standard_epub_url(book_id), ".epub")],
                                       lambda h: h in ("standardebooks.org", "www.standardebooks.org"),
-                                      "Standard Ebooks")
+                                      "Standard Ebooks", dest_dir)
     return {"title": None, "author": None, "path": path, "size": size, "ext": ext}  # read from the EPUB
 
 
@@ -324,7 +326,7 @@ def archive_files(ident: str, meta: dict) -> list[tuple[str, str]]:
     return [(f"{_IA}/download/{ident}/{quote(name)}", ".epub" if name.endswith(".epub") else ".txt") for name in picks]
 
 
-async def _archive_download(ident: str) -> dict:
+async def _archive_download(ident: str, dest_dir: Path) -> dict:
     if not _IA_ID.fullmatch(ident):
         raise CatalogError("Not an Internet Archive item.", 400)
     try:
@@ -334,7 +336,7 @@ async def _archive_download(ident: str) -> dict:
     candidates = archive_files(ident, meta)
     md = meta["metadata"]
     path, size, ext = await _download(candidates, lambda h: h == "archive.org" or h.endswith(".archive.org"),
-                                      "Internet Archive")
+                                      "Internet Archive", dest_dir)
     return {"title": _first(md.get("title")) or None, "author": catalog_name(_first(md.get("creator"))),
             "path": path, "size": size, "ext": ext}
 
@@ -346,7 +348,7 @@ class Source:
     key: str
     name: str
     search: Callable[[str, int], Awaitable[dict]]
-    download: Callable[[str], Awaitable[dict]]
+    download: Callable[[str, Path], Awaitable[dict]]
 
 
 SOURCES = [
@@ -383,12 +385,12 @@ async def search(query: str, page: int, sources: list[str] | None = None) -> dic
     return {"results": results, "has_more": has_more, "sources": status}
 
 
-async def download(source: str, book_id: str) -> dict:
+async def download(source: str, book_id: str, dest_dir: Path) -> dict:
     """Fetch a book's file (and metadata where the source offers it). Returns title/author/path/size/ext/filename."""
     src = BY_KEY.get(source)
     if src is None:
         raise CatalogError("Unknown book source.", 400)
-    got = await src.download(book_id)
+    got = await src.download(book_id, dest_dir)
     return {**got, "filename": f"{download_prefix(source, book_id)}{got['ext'].lstrip('.')}"}
 
 

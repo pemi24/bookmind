@@ -107,6 +107,37 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    # --- Accounts ---
+    # Sessions live in PostgreSQL; the browser only holds a random token in an HttpOnly cookie.
+    session_hours: int = 12  # signed in without "remember me" (renewed while in use)
+    remember_days: int = 30  # with "remember me"
+    # "auto": Secure cookies when the request came over HTTPS (plain http:// on the LAN can't use them).
+    cookie_secure: str = "auto"  # auto | true | false
+    password_min_length: int = 10
+    reset_token_minutes: int = 30
+    verify_token_hours: int = 48
+    require_email_verification: bool = False
+    # Rate limits (per IP address and per email): attempts per window.
+    login_rate_limit: int = 10  # per 15 minutes
+    signup_rate_limit: int = 5  # per hour
+    reset_rate_limit: int = 5  # per hour
+    lockout_after_failures: int = 5  # failed logins in a row before the account is briefly locked
+    # Email: "console" prints messages (reset links...) to the backend's terminal; "smtp" sends them.
+    email_backend: str = "console"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "BookMind <no-reply@localhost>"
+    smtp_tls: bool = True
+    app_base_url: str = ""  # links in emails; empty = the address the request came to
+    # The owner of everything created before accounts existed (and the first admin).
+    admin_email: str = "admin@localhost"
+    admin_password: str = ""  # empty = set it with scripts/create_admin.py
+    # Per-user quotas (0 = unlimited).
+    max_books_per_user: int = 50
+    daily_message_limit: int = 300
+
 
 @lru_cache
 def get_settings() -> Settings:

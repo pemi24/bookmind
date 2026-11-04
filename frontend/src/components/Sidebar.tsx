@@ -1,6 +1,6 @@
-import { AlertTriangle, BarChart3, BookOpen, Compass, Library as LibraryIcon, Loader2, Moon, Search, Smartphone, Sun, Upload, X } from "lucide-react";
-import { useRef, useState } from "react";
-import type { Book } from "../types";
+import { AlertTriangle, BarChart3, BookOpen, ChevronUp, Compass, Library as LibraryIcon, Loader2, LogOut, MonitorSmartphone, Moon, Search, Smartphone, Sun, Upload, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { Book, User } from "../types";
 import { isIndexing } from "../utils";
 import PhoneAccess from "./PhoneAccess";
 
@@ -22,6 +22,8 @@ export default function Sidebar({
   onUpload,
   dark,
   onToggleTheme,
+  user,
+  onSignOut,
   onClose,
 }: {
   books: Book[];
@@ -33,6 +35,8 @@ export default function Sidebar({
   onUpload: (files: File[]) => void;
   dark: boolean;
   onToggleTheme: () => void;
+  user: User;
+  onSignOut: (everywhere?: boolean) => void;
   onClose?: () => void; // shown in the mobile drawer
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -116,15 +120,74 @@ export default function Sidebar({
           </li>
         ))}
       </ul>
-      <div className="border-t border-stone-200 p-3 dark:border-stone-800">
+      <div className="space-y-0.5 border-t border-stone-200 p-3 dark:border-stone-800">
         <button
           onClick={() => setPhone(true)}
           className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-stone-600 transition hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
         >
           <Smartphone size={16} /> Use on your phone
         </button>
+        <UserMenu user={user} onSignOut={onSignOut} />
       </div>
       {phone && <PhoneAccess onClose={() => setPhone(false)} />}
     </nav>
+  );
+}
+
+function initials(user: User): string {
+  const words = (user.display_name || user.email).split(/[\s@._-]+/).filter(Boolean);
+  return ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? "")).toUpperCase() || "?";
+}
+
+/** Who is signed in, with sign-out (here, or on every device). */
+function UserMenu({ user, onSignOut }: { user: User; onSignOut: (everywhere?: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const item = "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-stone-100 dark:hover:bg-stone-800";
+  return (
+    <div ref={ref} className="relative">
+      {open && (
+        <div role="menu" className="absolute right-0 bottom-full left-0 mb-1 rounded-lg border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-700 dark:bg-stone-900">
+          <div className="px-3 py-2 text-xs text-stone-500">
+            Signed in as
+            <div className="truncate text-sm font-medium text-stone-800 dark:text-stone-100">{user.email}</div>
+          </div>
+          <button role="menuitem" onClick={() => onSignOut(false)} className={item}>
+            <LogOut size={15} /> Sign out
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => confirm("Sign out of BookMind on every device, including this one?") && onSignOut(true)}
+            className={item}
+          >
+            <MonitorSmartphone size={15} /> Sign out everywhere
+          </button>
+        </div>
+      )}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-stone-100 dark:hover:bg-stone-800"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">{initials(user)}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{user.display_name || user.email.split("@")[0]}</span>
+          <span className="block truncate text-xs text-stone-500">{user.email}</span>
+        </span>
+        <ChevronUp size={16} className={`shrink-0 text-stone-400 transition ${open ? "" : "rotate-180"}`} />
+      </button>
+    </div>
   );
 }

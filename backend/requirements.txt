@@ -28,6 +28,9 @@ python-docx>=1.1
 fpdf2>=2.7
 segno>=1.6  # QR code for opening BookMind on a phone
 
+# Accounts
+argon2-cffi>=23.1  # password hashing
+
 # Tests
 pytest>=8
 pytest-asyncio>=0.23

@@ -17,10 +17,10 @@ from app.retrieval.hybrid import search_book
 
 
 async def find_quotes(db: AsyncSession, book_id: int, book_title: str, topic: str,
-                      max_chapter: int | None, limit: int = 8) -> list[dict]:
+                      max_chapter: int | None, limit: int = 8, *, user_id: int) -> list[dict]:
     # As many candidate passages as fit the model's context (12 for cloud models).
     passages = await search_book(db, topic, book_id, max_chapter=max_chapter,
-                                 top_k=max(3, min(12, max_input_chars() // 2200)))
+                                 top_k=max(3, min(12, max_input_chars() // 2200)), user_id=user_id)
     if not passages:
         return []
     picked = await llm.complete_json(

@@ -47,15 +47,16 @@ def _keyword_tsquery(query: str) -> str | None:
     return " | ".join(terms) if terms else None
 
 
-def _filters(book_id: int, max_chapter: int | None):
-    conds = [Chunk.book_id == book_id]
+def _filters(book_id: int, max_chapter: int | None, user_id: int):
+    # Ownership is part of the SQL itself: a book that isn't the user's yields no rows at all.
+    conds = [Chunk.book_id == book_id, Chunk.book_id.in_(select(Book.id).where(Book.user_id == user_id))]
     if max_chapter is not None:
         conds.append(Chunk.chapter_position <= max_chapter)
     return conds
 
 
 async def vector_search(
-    db: AsyncSession, qvec: list[float], book_id: int, max_chapter: int | None, limit: int
+    db: AsyncSession, qvec: list[float], book_id: int, max_chapter: int | None, limit: int, *, user_id: int
 ) -> list[int]:
     s = get_settings()
     # Filtered HNSW: iterative scan keeps searching until enough rows pass the WHERE clause.
@@ -63,7 +64,7 @@ async def vector_search(
     await db.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
     stmt = (
         select(Chunk.id)
-        .where(*_filters(book_id, max_chapter), Chunk.embedding.is_not(None))
+        .where(*_filters(book_id, max_chapter, user_id), Chunk.embedding.is_not(None))
         .order_by(Chunk.embedding.cosine_distance(qvec))
         .limit(limit)
     )
@@ -71,7 +72,7 @@ async def vector_search(
 
 
 async def keyword_search(
-    db: AsyncSession, query: str, book_id: int, max_chapter: int | None, limit: int
+    db: AsyncSession, query: str, book_id: int, max_chapter: int | None, limit: int, *, user_id: int
 ) -> list[int]:
     q = _keyword_tsquery(query)
     if not q:
@@ -79,7 +80,7 @@ async def keyword_search(
     tsq = func.to_tsquery("english", q)
     stmt = (
         select(Chunk.id)
-        .where(*_filters(book_id, max_chapter), Chunk.tsv.op("@@")(tsq))
+        .where(*_filters(book_id, max_chapter, user_id), Chunk.tsv.op("@@")(tsq))
         .order_by(func.ts_rank_cd(Chunk.tsv, tsq, 32).desc())
         .limit(limit)
     )
@@ -94,14 +95,14 @@ def reciprocal_rank_fusion(rankings: list[list[int]], k: int = 60) -> dict[int, 
     return scores
 
 
-async def _load_passages(db: AsyncSession, ids: list[int]) -> dict[int, Passage]:
+async def _load_passages(db: AsyncSession, ids: list[int], user_id: int) -> dict[int, Passage]:
     if not ids:
         return {}
     stmt = (
         select(Chunk, Chapter.title, Book.title)
         .join(Chapter, Chapter.id == Chunk.chapter_id)
         .join(Book, Book.id == Chunk.book_id)
-        .where(Chunk.id.in_(ids))
+        .where(Chunk.id.in_(ids), Book.user_id == user_id)
     )
     out = {}
     for chunk, ch_title, book_title in (await db.execute(stmt)).all():
@@ -121,7 +122,10 @@ async def search_book(
     max_chapter: int | None = None,
     top_k: int | None = None,
     use_rerank: bool = True,
+    *,
+    user_id: int,
 ) -> list[Passage]:
+    """Hybrid search in one of `user_id`'s books (another user's book gives no results)."""
     s = get_settings()
     if not top_k:
         from app.llm.providers import get_provider  # local import: retrieval doesn't otherwise need the LLM
@@ -129,11 +133,11 @@ async def search_book(
         top_k = s.retrieval_top_k or get_provider().default_top_k
     qvec = await asyncio.to_thread(get_embedder().embed_query, query)
 
-    vec_ids = await vector_search(db, qvec, book_id, max_chapter, s.retrieval_candidates)
-    kw_ids = await keyword_search(db, query, book_id, max_chapter, s.retrieval_candidates)
+    vec_ids = await vector_search(db, qvec, book_id, max_chapter, s.retrieval_candidates, user_id=user_id)
+    kw_ids = await keyword_search(db, query, book_id, max_chapter, s.retrieval_candidates, user_id=user_id)
     fused = reciprocal_rank_fusion([vec_ids, kw_ids], k=s.rrf_k)
     cand_ids = sorted(fused, key=fused.get, reverse=True)[: s.retrieval_candidates]
-    passages = await _load_passages(db, cand_ids)
+    passages = await _load_passages(db, cand_ids, user_id)
 
     cands = []
     for cid in cand_ids:
@@ -163,10 +167,12 @@ async def search_books(
     book_ids: list[int],
     max_chapters: dict[int, int | None] | None = None,
     per_book_k: int = 5,
+    *,
+    user_id: int,
 ) -> list[Passage]:
-    """Compare mode: retrieve separately per book so every book is represented."""
+    """Compare mode: retrieve separately per book so every book is represented (only `user_id`'s books)."""
     max_chapters = max_chapters or {}
     out: list[Passage] = []
     for bid in book_ids:
-        out.extend(await search_book(db, query, bid, max_chapters.get(bid), top_k=per_book_k))
+        out.extend(await search_book(db, query, bid, max_chapters.get(bid), top_k=per_book_k, user_id=user_id))
     return out

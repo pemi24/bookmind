@@ -32,7 +32,7 @@ import TimelinePanel from "./components/panels/TimelinePanel";
 import ReaderPanel, { type ReaderTarget } from "./components/ReaderPanel";
 import Sidebar, { type Page } from "./components/Sidebar";
 import StatsPage from "./components/StatsPage";
-import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source } from "./types";
+import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source, User } from "./types";
 import { isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
 
@@ -130,7 +130,7 @@ function SpoilerControl({
   );
 }
 
-export default function App() {
+export default function App({ user, onSignOut }: { user: User; onSignOut: (everywhere?: boolean) => void }) {
   const { dark, toggle } = useTheme();
   const [route, navigate] = useRoute();
   const [books, setBooks] = useState<Book[]>([]);
@@ -354,6 +354,8 @@ export default function App() {
       onUpload={upload}
       dark={dark}
       onToggleTheme={toggle}
+      user={user}
+      onSignOut={onSignOut}
       onClose={inDrawer ? () => setDrawer(false) : undefined}
     />
   );

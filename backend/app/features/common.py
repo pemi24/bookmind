@@ -25,10 +25,11 @@ def parallel_requests() -> int:
 _QUOTES = str.maketrans({"“": '"', "”": '"', "„": '"', "‘": "'", "’": "'", "‚": "'", "–": "-", "—": "-"})
 
 
-async def ready_book(db: AsyncSession, book_id: int) -> Book:
-    book = await db.get(Book, book_id)
-    if book is None:
-        raise HTTPException(404, "Book not found.")
+async def ready_book(db: AsyncSession, book_id: int, user) -> Book:
+    """The user's own book, indexed and ready; 404 for anyone else's."""
+    from app.auth import scope
+
+    book = await scope.book(db, book_id, user)
     if book.status != "ready":
         raise HTTPException(409, "This book is not indexed yet.")
     return book

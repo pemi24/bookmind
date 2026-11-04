@@ -17,7 +17,7 @@ from app.retrieval.hybrid import search_book
 
 async def outline(db: AsyncSession, book: Book, thesis: str, max_chapter: int | None, sections: int) -> dict:
     passages = await search_book(db, thesis, book.id, max_chapter=max_chapter,
-                                 top_k=max(4, min(16, max_input_chars() // 2200)))
+                                 top_k=max(4, min(16, max_input_chars() // 2200)), user_id=book.user_id)
     if not passages:
         raise llm.LLMError("No passages in the book relate to this thesis. Try rephrasing it.", 422)
     out = await llm.complete_json(P.SYSTEM, P.build_user(book.title, thesis, [p.text for p in passages], sections),

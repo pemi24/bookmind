@@ -13,15 +13,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import scope
+from app.auth.deps import CurrentUser, current_user
 from app.config import get_settings
-from app.db.models import Book, Chapter, Chunk
+from app.db.models import Book, Chapter, Chunk, User
 from app.db.session import SessionLocal, get_db
 from app.ingestion.chunking import page_at
 from app.ingestion.parsers import SUPPORTED_EXTENSIONS
 from app.ingestion.pipeline import schedule_ingestion, title_from_filename
 from app.retrieval.hybrid import search_book
 
-router = APIRouter(prefix="/api", tags=["books"])
+router = APIRouter(prefix="/api", tags=["books"], dependencies=[Depends(current_user)])
 
 
 def book_dict(b: Book, chapter_count: int | None = None) -> dict:
@@ -46,39 +48,53 @@ def reading_dict(b: Book) -> dict | None:
             "updated_at": b.reading_updated_at.isoformat() if b.reading_updated_at else None}
 
 
-async def get_book_or_404(db: AsyncSession, book_id: int) -> Book:
-    book = await db.get(Book, book_id)
-    if book is None:
-        raise HTTPException(404, "Book not found.")
-    return book
+def user_upload_dir(user_id: int) -> Path:
+    """Each user's files in their own folder (file names are random: uuid4)."""
+    d = get_settings().upload_dir / f"user-{user_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+async def check_book_quota(db: AsyncSession, user: User) -> None:
+    limit = get_settings().max_books_per_user
+    if limit and await db.scalar(select(func.count()).select_from(Book).where(Book.user_id == user.id)) >= limit:
+        raise HTTPException(409, f"Your library is full ({limit} books, MAX_BOOKS_PER_USER). Delete a book to add another.")
+
+
+async def get_book_or_404(db: AsyncSession, book_id: int, user: User | int) -> Book:
+    """The user's own book, or 404 (also for someone else's book)."""
+    return await scope.book(db, book_id, user)
 
 
 @router.get("/books")
-async def list_books(db: AsyncSession = Depends(get_db)):
+async def list_books(user: CurrentUser, db: AsyncSession = Depends(get_db)):
     counts = dict((await db.execute(
-        select(Chapter.book_id, func.count()).group_by(Chapter.book_id)
+        select(Chapter.book_id, func.count()).join(Book, Book.id == Chapter.book_id)
+        .where(Book.user_id == user.id).group_by(Chapter.book_id)
     )).all())
-    books = (await db.execute(select(Book).order_by(Book.created_at.desc()))).scalars().all()
+    books = (await db.execute(
+        select(Book).where(Book.user_id == user.id).order_by(Book.created_at.desc()))).scalars().all()
     return [book_dict(b, counts.get(b.id, 0)) for b in books]
 
 
 @router.get("/books/{book_id}")
-async def get_book(book_id: int, db: AsyncSession = Depends(get_db)):
-    book = await get_book_or_404(db, book_id)
+async def get_book(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await get_book_or_404(db, book_id, user)
     n = await db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == book_id))
     return book_dict(book, n)
 
 
 @router.post("/books", status_code=201)
-async def upload_book(file: UploadFile, db: AsyncSession = Depends(get_db)):
+async def upload_book(user: CurrentUser, file: UploadFile, db: AsyncSession = Depends(get_db)):
     s = get_settings()
     name = Path(file.filename or "book").name
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(415, f"Unsupported file type '{ext or '?'}'. Upload a PDF, EPUB, DOCX, TXT or MD file.")
 
+    await check_book_quota(db, user)
     limit = s.max_upload_mb * 1024 * 1024
-    dest = s.upload_dir / f"{uuid.uuid4().hex}{ext}"
+    dest = user_upload_dir(user.id) / f"{uuid.uuid4().hex}{ext}"
     size = 0
     try:
         with dest.open("wb") as out:
@@ -96,7 +112,7 @@ async def upload_book(file: UploadFile, db: AsyncSession = Depends(get_db)):
 
     title = title_from_filename(name)
     book = Book(
-        title=title, filename=name, file_path=str(dest), file_type=ext.lstrip("."),
+        user_id=user.id, title=title, filename=name, file_path=str(dest), file_type=ext.lstrip("."),
         file_size=size, status="pending", status_message="Queued", warnings=[], suggested_questions=[],
     )
     db.add(book)
@@ -107,8 +123,8 @@ async def upload_book(file: UploadFile, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/books/{book_id}", status_code=204)
-async def delete_book(book_id: int, db: AsyncSession = Depends(get_db)):
-    book = await get_book_or_404(db, book_id)
+async def delete_book(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await get_book_or_404(db, book_id, user)
     if book.status == "processing":
         raise HTTPException(409, "This book is being indexed. Wait for it to finish, then delete it.")
     path = Path(book.file_path)
@@ -118,8 +134,8 @@ async def delete_book(book_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/books/{book_id}/reindex", status_code=202)
-async def reindex_book(book_id: int, db: AsyncSession = Depends(get_db)):
-    book = await get_book_or_404(db, book_id)
+async def reindex_book(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await get_book_or_404(db, book_id, user)
     if book.status in ("processing", "pending"):
         raise HTTPException(409, "This book is already queued or indexing.")
     book.status, book.progress, book.status_message, book.error = "pending", 0.0, "Queued", None
@@ -129,14 +145,17 @@ async def reindex_book(book_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/books/{book_id}/progress")
-async def book_progress(book_id: int, request: Request):
+async def book_progress(user: CurrentUser, book_id: int, request: Request):
     """Server-Sent Events stream of indexing progress until the book is ready/failed."""
+    async with SessionLocal() as db:
+        await get_book_or_404(db, book_id, user)
+    uid = user.id
 
     async def events():
         last = None
         while not await request.is_disconnected():
             async with SessionLocal() as db:
-                book = await db.get(Book, book_id)
+                book = await db.scalar(select(Book).where(Book.id == book_id, Book.user_id == uid))
                 if book is None:
                     yield "event: error\ndata: {\"message\": \"Book not found\"}\n\n"
                     return
@@ -154,8 +173,8 @@ async def book_progress(book_id: int, request: Request):
 
 
 @router.get("/books/{book_id}/chapters")
-async def list_chapters(book_id: int, db: AsyncSession = Depends(get_db)):
-    await get_book_or_404(db, book_id)
+async def list_chapters(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    await get_book_or_404(db, book_id, user)
     rows = (await db.execute(
         select(Chapter.id, Chapter.position, Chapter.title, Chapter.start_page, Chapter.end_page,
                func.length(Chapter.text))
@@ -172,9 +191,9 @@ class ReadingUpdate(BaseModel):
 
 
 @router.put("/books/{book_id}/reading")
-async def save_reading(book_id: int, req: ReadingUpdate, db: AsyncSession = Depends(get_db)):
+async def save_reading(user: CurrentUser, book_id: int, req: ReadingUpdate, db: AsyncSession = Depends(get_db)):
     """Remember where the reader is; `reached` also advances the furthest chapter read (never moves back)."""
-    book = await get_book_or_404(db, book_id)
+    book = await get_book_or_404(db, book_id, user)
     exists = await db.scalar(select(Chapter.id).where(Chapter.book_id == book_id, Chapter.position == req.position))
     if exists is None:
         raise HTTPException(400, "This book has no such chapter.")
@@ -188,26 +207,24 @@ async def save_reading(book_id: int, req: ReadingUpdate, db: AsyncSession = Depe
 
 
 @router.delete("/books/{book_id}/reading", status_code=204)
-async def reset_reading(book_id: int, db: AsyncSession = Depends(get_db)):
+async def reset_reading(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
     """Start the book over: forget the position and the furthest chapter read."""
-    book = await get_book_or_404(db, book_id)
+    book = await get_book_or_404(db, book_id, user)
     book.reading_position = book.reading_offset = book.furthest_position = book.reading_updated_at = None
     await db.commit()
 
 
 @router.get("/chapters/{chapter_id}")
-async def get_chapter(chapter_id: int, db: AsyncSession = Depends(get_db)):
-    ch = await db.get(Chapter, chapter_id)
-    if ch is None:
-        raise HTTPException(404, "Chapter not found.")
+async def get_chapter(user: CurrentUser, chapter_id: int, db: AsyncSession = Depends(get_db)):
+    ch = await scope.chapter(db, chapter_id, user)
     return {"id": ch.id, "book_id": ch.book_id, "position": ch.position, "title": ch.title,
             "text": ch.text, "page_map": ch.page_map, "start_page": ch.start_page, "end_page": ch.end_page}
 
 
 @router.get("/books/{book_id}/search")
-async def search_text(book_id: int, q: str, limit: int = 200, db: AsyncSession = Depends(get_db)):
+async def search_text(user: CurrentUser, book_id: int, q: str, limit: int = 200, db: AsyncSession = Depends(get_db)):
     """Exact (case-insensitive) text search for the reader. Returns every occurrence with location."""
-    await get_book_or_404(db, book_id)
+    await get_book_or_404(db, book_id, user)
     q = q.strip()
     if len(q) < 2:
         raise HTTPException(400, "Search for at least 2 characters.")
@@ -237,9 +254,10 @@ async def search_text(book_id: int, q: str, limit: int = 200, db: AsyncSession =
 
 
 @router.get("/chunks/{chunk_id}")
-async def get_chunk(chunk_id: int, db: AsyncSession = Depends(get_db)):
+async def get_chunk(user: CurrentUser, chunk_id: int, db: AsyncSession = Depends(get_db)):
     row = (await db.execute(
-        select(Chunk, Chapter.title).join(Chapter, Chapter.id == Chunk.chapter_id).where(Chunk.id == chunk_id)
+        select(Chunk, Chapter.title).join(Chapter, Chapter.id == Chunk.chapter_id)
+        .join(Book, Book.id == Chunk.book_id).where(Chunk.id == chunk_id, Book.user_id == user.id)
     )).first()
     if row is None:
         raise HTTPException(404, "Passage not found (the book may have been re-indexed).")
@@ -250,11 +268,11 @@ async def get_chunk(chunk_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/books/{book_id}/retrieve")
-async def debug_retrieve(book_id: int, q: str, max_chapter: int | None = None, k: int = 8,
+async def debug_retrieve(user: CurrentUser, book_id: int, q: str, max_chapter: int | None = None, k: int = 8,
                          db: AsyncSession = Depends(get_db)):
     """Inspect hybrid retrieval results directly (used by tests and scripts/eval_retrieval.py)."""
-    book = await get_book_or_404(db, book_id)
+    book = await get_book_or_404(db, book_id, user)
     if book.status != "ready":
         raise HTTPException(409, "This book is not indexed yet.")
-    passages = await search_book(db, q, book_id, max_chapter=max_chapter, top_k=k)
+    passages = await search_book(db, q, book_id, max_chapter=max_chapter, top_k=k, user_id=user.id)
     return [p.to_dict() for p in passages]

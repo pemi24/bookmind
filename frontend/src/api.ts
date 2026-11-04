@@ -36,6 +36,7 @@ import type {
   SummaryResult,
   TimelineEvent,
   TranslationState,
+  User,
 } from "./types";
 
 export class ApiError extends Error {
@@ -44,10 +45,33 @@ export class ApiError extends Error {
   }
 }
 
+/* ---------- session: the cookie travels by itself; changes also carry the CSRF token ---------- */
+let onSignedOut: (() => void) | null = null;
+/** Called when the server says the session is gone (expired, signed out elsewhere). */
+export function setSignedOutHandler(fn: (() => void) | null) {
+  onSignedOut = fn;
+}
+
+function csrfToken(): string {
+  const m = document.cookie.match(/(?:^|;\s*)bm_csrf=([^;]*)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
+/** fetch() for BookMind's API: marks the request as coming from the app and adds the CSRF token. */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("X-Requested-With", "BookMind");
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set("X-CSRF-Token", csrfToken());
+  const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  if (res.status === 401 && !path.startsWith("/api/auth/")) onSignedOut?.();
+  return res;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, init);
+    res = await apiFetch(path, init);
   } catch {
     throw new ApiError("Can't reach the BookMind backend. Is it running (start.bat / start.sh)?", 0);
   }
@@ -66,6 +90,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
+
+export const auth = {
+  config: () => request<{ password_min_length: number; require_email_verification: boolean }>("/api/auth/config"),
+  me: () => request<{ user: User }>("/api/auth/me"),
+  signup: (email: string, password: string, display_name: string) =>
+    request<{ user: User; verification_required: boolean }>("/api/auth/signup", json("POST", { email, password, display_name })),
+  login: (email: string, password: string, remember: boolean) =>
+    request<{ user: User }>("/api/auth/login", json("POST", { email, password, remember })),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  logoutAll: () => request<{ ok: boolean }>("/api/auth/logout-all", { method: "POST" }),
+  forgot: (email: string) => request<{ ok: boolean; message: string }>("/api/auth/forgot", json("POST", { email })),
+  reset: (token: string, password: string) => request<{ ok: boolean }>("/api/auth/reset", json("POST", { token, password })),
+  verify: (token: string) => request<{ ok: boolean }>("/api/auth/verify", json("POST", { token })),
+  resendVerification: (email: string) => request<{ ok: boolean }>("/api/auth/resend-verification", json("POST", { email })),
+};
 
 export const api = {
   health: () => request<Health>("/api/health"),
@@ -90,6 +129,7 @@ export const api = {
       `/api/conversations/${id}`,
     ),
   deleteConversation: (id: number) => request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
+  renameConversation: (id: number, title: string) => request<{ id: number; title: string }>(`/api/conversations/${id}`, json("PATCH", { title })),
 
   // Summaries
   summarize: (bookId: number, body: { chapter_id?: number | null; length: Length; max_chapter?: number | null; refresh?: boolean }) =>
@@ -155,7 +195,7 @@ export const api = {
   essay: (bookId: number, body: { thesis: string; max_chapter: number | null; sections: number }) =>
     request<Essay>(`/api/books/${bookId}/essay`, json("POST", body)),
   essayMarkdown: async (bookId: number, essay: Essay): Promise<string> => {
-    const res = await fetch(`/api/books/${bookId}/essay/export`, json("POST", { essay }));
+    const res = await apiFetch(`/api/books/${bookId}/essay/export`, json("POST", { essay }));
     if (!res.ok) throw new ApiError("Couldn't format the outline.", res.status);
     return res.text();
   },
@@ -263,7 +303,7 @@ export function streamLibraryAnswer(body: LibraryQuery, h: ChatHandlers, signal?
 async function streamAnswer(url: string, body: unknown, h: ChatHandlers, signal?: AbortSignal) {
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await apiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

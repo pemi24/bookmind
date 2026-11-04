@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import httpx
+
+from tests.conftest import signed_in
 import pytest
 
 from tests.test_features_api import fake_llm  # noqa: F401  (fixture)
@@ -13,7 +15,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 async def test_highlights_and_reading_progress(test_db, fake_llm):  # noqa: F811
     from app.main import app
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         r = await c.post("/api/books", files={"file": ("rd.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
         book_id = r.json()["id"]
         try:
@@ -84,7 +86,7 @@ async def test_library_essay_translation_stats(test_db, fake_llm):  # noqa: F811
 
     from app.main import app
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         r = await c.post("/api/books", files={"file": ("lib.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
         book_id = r.json()["id"]
         try:
@@ -181,7 +183,7 @@ async def test_chat_searches_again_before_saying_not_found(test_db, fake_llm, mo
         return found[:1] if searches["n"] == 1 else found
 
     monkeypatch.setattr(chat_api, "search_book", search_book)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         r = await c.post("/api/books", files={"file": ("sa.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
         book_id = r.json()["id"]
         try:
@@ -218,7 +220,7 @@ async def test_book_memory_is_built_and_used_in_chat(test_db, fake_llm, monkeypa
         yield "Mara keeps the lighthouse [1]."
 
     monkeypatch.setattr(client, "stream_text", stream_text)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         r = await c.post("/api/books", files={"file": ("mem.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
         book_id = r.json()["id"]
         try:

@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 
 import httpx
+
+from tests.conftest import signed_in
 import psycopg
 import pytest
 
@@ -17,7 +19,7 @@ from tests.test_retrieval_api import BOOK, C1, C2, C3, _wait_ready
 async def client(test_db):
     from app.main import app
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         yield c
 
 
@@ -58,10 +60,10 @@ async def test_huge_upload_is_rejected_and_not_kept(client, monkeypatch):
 
     settings = get_settings()
     monkeypatch.setattr(settings, "max_upload_mb", 1)
-    before = set(settings.upload_dir.iterdir())
+    before = {p for p in settings.upload_dir.rglob("*") if p.is_file()}
     r = await client.post("/api/books", files={"file": ("big.txt", b"x" * (2 * 1024 * 1024), "text/plain")})
     assert r.status_code == 413 and "1 MB" in r.json()["detail"]
-    assert set(settings.upload_dir.iterdir()) == before  # partial file cleaned up
+    assert {p for p in settings.upload_dir.rglob("*") if p.is_file()} == before  # partial file cleaned up
 
 
 async def test_database_down_returns_503_with_hint(client):

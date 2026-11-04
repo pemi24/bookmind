@@ -6,9 +6,12 @@ Tests needing Postgres are skipped if the server can't be reached.
 from __future__ import annotations
 
 import asyncio
+import uuid
 import os
 import subprocess
+import tempfile
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,7 @@ if _base and not _base.rstrip("/").endswith("_test"):
     head, _, name = _base.rpartition("/")
     os.environ["DATABASE_URL"] = f"{head}/{name.split('?')[0]}_test"
 os.environ.setdefault("RERANK_ENABLED", "true")
+os.environ["UPLOAD_DIR"] = tempfile.mkdtemp(prefix="bookmind-test-uploads-")  # never the real library folder
 os.environ["BOOKMIND_ENV_OVERRIDE"] = "1"  # let these variables beat backend/.env (also in subprocesses)
 
 _db_ready: bool | None = None
@@ -51,3 +55,22 @@ def test_db():
     if not _prepare_db():
         pytest.skip("PostgreSQL test database unavailable (see output above)")
     return os.environ["DATABASE_URL"]
+
+
+@asynccontextmanager
+async def signed_in(app, email: str | None = None):
+    """An API client signed in as a brand-new user, with the CSRF and app headers already set."""
+    import httpx
+
+    from app.auth import ratelimit
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60,
+                                 headers={"X-Requested-With": "BookMind"}) as c:
+        ratelimit.clear_all()  # many sign-ups from one "IP" in a test run
+        email = email or f"reader-{uuid.uuid4().hex[:10]}@example.com"
+        r = await c.post("/api/auth/signup", json={"email": email, "password": "correct horse battery",
+                                                    "display_name": "Tester"})
+        assert r.status_code == 201, r.text
+        c.headers["X-CSRF-Token"] = c.cookies.get("bm_csrf", "")
+        c.user = r.json()["user"]
+        yield c

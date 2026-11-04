@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 
 import httpx
+
+from tests.conftest import signed_in
 import pytest
 
 from app.llm.prompts import intent as P
@@ -138,7 +140,7 @@ async def test_chat_flow_routes_messages(test_db, fake_llm, monkeypatch):  # noq
     monkeypatch.setattr(client, "stream_text", stream_text)
     monkeypatch.setattr(client, "complete_text", complete_text)
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         r = await c.post("/api/books", files={"file": ("ic.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
         book_id = r.json()["id"]
         try:

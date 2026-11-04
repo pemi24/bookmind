@@ -7,14 +7,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import psycopg
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
-from app.api import books, catalog, chat, features, library, notes, stats, study
+from app.auth.deps import current_user
+from app.api import auth, books, catalog, chat, features, library, notes, stats, study
 from app.config import get_settings
 from app.db.models import AppMeta, Book
 from app.db.session import SessionLocal
@@ -114,7 +115,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for module in (books, chat, features, study, notes, catalog, library, stats):
+for module in (auth, books, chat, features, study, notes, catalog, library, stats):
     app.include_router(module.router)
 
 
@@ -161,7 +162,7 @@ async def health():
     }
 
 
-@app.get("/api/network")
+@app.get("/api/network", dependencies=[Depends(current_user)])
 async def network_info(request: Request):
     """Addresses to open BookMind from a phone or another device on the same Wi-Fi, with QR codes."""
     s = get_settings()

@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import scope
+from app.auth.deps import CurrentUser, current_user
 from app.db.models import Chapter, Chunk, Entity, EntityRelation, TimelineEvent
 from app.db.session import get_db
 from app.features import analysis, essay, memory, quotes, summaries, translate
@@ -20,7 +22,7 @@ from app.features.common import get_chapter, ready_book
 from app.features.jobs import is_running, job_dict, latest_job, start_job
 from app.llm.client import llm_configured, not_configured_message
 
-router = APIRouter(prefix="/api", tags=["features"])
+router = APIRouter(prefix="/api", tags=["features"], dependencies=[Depends(current_user)])
 
 Length = Literal["short", "medium", "detailed"]
 
@@ -55,8 +57,8 @@ def _summary_dict(s) -> dict:
 
 
 @router.post("/books/{book_id}/summaries")
-async def summarize(book_id: int, req: SummaryRequest, db: AsyncSession = Depends(get_db)):
-    book = await ready_book(db, book_id)
+async def summarize(user: CurrentUser, book_id: int, req: SummaryRequest, db: AsyncSession = Depends(get_db)):
+    book = await ready_book(db, book_id, user)
     max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
     if req.chapter_id is not None:
         chapter = await get_chapter(db, book_id, req.chapter_id, max_ch)
@@ -75,10 +77,10 @@ async def summarize(book_id: int, req: SummaryRequest, db: AsyncSession = Depend
 
 
 @router.get("/books/{book_id}/summaries")
-async def get_summary(book_id: int, length: Length = "medium", chapter_id: int | None = None,
+async def get_summary(user: CurrentUser, book_id: int, length: Length = "medium", chapter_id: int | None = None,
                       max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
     """Cached summary if available, else the status of the job producing it."""
-    await ready_book(db, book_id)
+    await ready_book(db, book_id, user)
     max_ch = await effective_max_chapter(db, book_id, max_chapter)
     if chapter_id is not None:
         await get_chapter(db, book_id, chapter_id, max_ch)
@@ -95,8 +97,8 @@ async def get_summary(book_id: int, length: Length = "medium", chapter_id: int |
 # ---------------------------------------------------------------- analysis: explorer + timeline
 
 @router.post("/books/{book_id}/analysis", status_code=202)
-async def start_analysis(book_id: int, db: AsyncSession = Depends(get_db)):
-    await ready_book(db, book_id)
+async def start_analysis(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    await ready_book(db, book_id, user)
     require_llm()
     return await start_job(book_id, analysis.JOB_KIND, analysis.analysis_job(book_id))
 
@@ -111,8 +113,8 @@ async def _analysis_status(db: AsyncSession, book_id: int) -> dict | None:
 
 
 @router.get("/books/{book_id}/entities")
-async def list_entities(book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
-    await ready_book(db, book_id)
+async def list_entities(user: CurrentUser, book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
+    await ready_book(db, book_id, user)
     max_ch = await effective_max_chapter(db, book_id, max_chapter)
     stmt = select(Entity).where(Entity.book_id == book_id)
     rstmt = select(EntityRelation).where(EntityRelation.book_id == book_id)
@@ -137,11 +139,9 @@ async def list_entities(book_id: int, max_chapter: int | None = None, db: AsyncS
 
 
 @router.get("/entities/{entity_id}/mentions")
-async def entity_mentions(entity_id: int, max_chapter: int | None = None, limit: int = 12,
+async def entity_mentions(user: CurrentUser, entity_id: int, max_chapter: int | None = None, limit: int = 12,
                           db: AsyncSession = Depends(get_db)):
-    ent = await db.get(Entity, entity_id)
-    if ent is None:
-        raise HTTPException(404, "Entity not found.")
+    ent = await scope.entity(db, entity_id, user)
     max_ch = await effective_max_chapter(db, ent.book_id, max_chapter)
     names = [n for n in {ent.name, *ent.aliases} if len(n) >= 2]
     conds = [Chunk.text.ilike("%" + n.replace("%", "\\%").replace("_", "\\_") + "%", escape="\\") for n in names]
@@ -156,8 +156,8 @@ async def entity_mentions(entity_id: int, max_chapter: int | None = None, limit:
 
 
 @router.get("/books/{book_id}/timeline")
-async def timeline(book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
-    await ready_book(db, book_id)
+async def timeline(user: CurrentUser, book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
+    await ready_book(db, book_id, user)
     max_ch = await effective_max_chapter(db, book_id, max_chapter)
     stmt = (select(TimelineEvent, Chunk.char_start, Chunk.char_end, Chunk.chapter_id, Chunk.page_start, Chapter.title)
             .outerjoin(Chunk, Chunk.id == TimelineEvent.chunk_id)
@@ -185,11 +185,11 @@ class QuoteRequest(BaseModel):
 
 
 @router.post("/books/{book_id}/quotes")
-async def quote_finder(book_id: int, req: QuoteRequest, db: AsyncSession = Depends(get_db)):
-    book = await ready_book(db, book_id)
+async def quote_finder(user: CurrentUser, book_id: int, req: QuoteRequest, db: AsyncSession = Depends(get_db)):
+    book = await ready_book(db, book_id, user)
     require_llm()
     max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
-    found = await quotes.find_quotes(db, book_id, book.title, req.topic, max_ch, req.limit)
+    found = await quotes.find_quotes(db, book_id, book.title, req.topic, max_ch, req.limit, user_id=user.id)
     return {"topic": req.topic, "quotes": found}
 
 
@@ -202,8 +202,8 @@ class EssayRequest(BaseModel):
 
 
 @router.post("/books/{book_id}/essay")
-async def essay_outline(book_id: int, req: EssayRequest, db: AsyncSession = Depends(get_db)):
-    book = await ready_book(db, book_id)
+async def essay_outline(user: CurrentUser, book_id: int, req: EssayRequest, db: AsyncSession = Depends(get_db)):
+    book = await ready_book(db, book_id, user)
     require_llm()
     max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
     return await essay.outline(db, book, req.thesis.strip(), max_ch, req.sections)
@@ -214,9 +214,9 @@ class EssayExport(BaseModel):
 
 
 @router.post("/books/{book_id}/essay/export")
-async def essay_export(book_id: int, req: EssayExport, db: AsyncSession = Depends(get_db)):
+async def essay_export(user: CurrentUser, book_id: int, req: EssayExport, db: AsyncSession = Depends(get_db)):
     """The outline as a Markdown file (the browser already has the outline; this just formats it)."""
-    book = await ready_book(db, book_id)
+    book = await ready_book(db, book_id, user)
     try:
         md = essay.to_markdown(book, req.essay)
     except (KeyError, TypeError) as e:
@@ -243,10 +243,8 @@ async def _translation_state(db: AsyncSession, chapter: Chapter, language: str) 
 
 
 @router.get("/chapters/{chapter_id}/translation")
-async def get_translation(chapter_id: int, language: str, db: AsyncSession = Depends(get_db)):
-    chapter = await db.get(Chapter, chapter_id)
-    if chapter is None:
-        raise HTTPException(404, "Chapter not found.")
+async def get_translation(user: CurrentUser, chapter_id: int, language: str, db: AsyncSession = Depends(get_db)):
+    chapter = await scope.chapter(db, chapter_id, user)
     return await _translation_state(db, chapter, _language(language))
 
 
@@ -255,11 +253,9 @@ class TranslateRequest(BaseModel):
 
 
 @router.post("/chapters/{chapter_id}/translation")
-async def start_translation(chapter_id: int, req: TranslateRequest, db: AsyncSession = Depends(get_db)):
+async def start_translation(user: CurrentUser, chapter_id: int, req: TranslateRequest, db: AsyncSession = Depends(get_db)):
     """Translate a chapter in the background (or return the saved translation)."""
-    chapter = await db.get(Chapter, chapter_id)
-    if chapter is None:
-        raise HTTPException(404, "Chapter not found.")
+    chapter = await scope.chapter(db, chapter_id, user)
     language = _language(req.language)
     state = await _translation_state(db, chapter, language)
     if state["status"] in ("done", "running"):
@@ -273,21 +269,22 @@ async def start_translation(chapter_id: int, req: TranslateRequest, db: AsyncSes
 # ---------------------------------------------------------------- book memory
 
 @router.get("/books/{book_id}/memory")
-async def memory_status(book_id: int, db: AsyncSession = Depends(get_db)):
+async def memory_status(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
     """How many chapters have a memory summary, and the job writing them (if any)."""
-    await ready_book(db, book_id)
+    await ready_book(db, book_id, user)
     return {**await memory.status(db, book_id), "job": job_dict(await latest_job(db, book_id, memory.JOB_KIND))}
 
 
 @router.post("/books/{book_id}/memory", status_code=202)
-async def build_memory(book_id: int, db: AsyncSession = Depends(get_db)):
+async def build_memory(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
     """Write the missing chapter summaries (books added before book memory existed, or after a failure)."""
-    await ready_book(db, book_id)
+    await ready_book(db, book_id, user)
     require_llm()
     job = await start_job(book_id, memory.JOB_KIND, memory.memory_job(book_id))
     return {**await memory.status(db, book_id), "job": job}
 
 
 @router.get("/books/{book_id}/jobs/{kind}")
-async def job_status(book_id: int, kind: str, db: AsyncSession = Depends(get_db)):
+async def job_status(user: CurrentUser, book_id: int, kind: str, db: AsyncSession = Depends(get_db)):
+    await scope.book(db, book_id, user)
     return {"job": job_dict(await latest_job(db, book_id, kind))}

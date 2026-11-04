@@ -37,24 +37,28 @@ def streak(active: set[date], today: date) -> int:
     return n
 
 
-async def compute(db: AsyncSession, days: int = 30, today: date | None = None) -> dict:
+async def compute(db: AsyncSession, user_id: int, days: int = 30, today: date | None = None) -> dict:
+    """Stats for one user's books only."""
     today = today or date.today()
+    mine = select(Book.id).where(Book.user_id == user_id)
     rows = (await db.execute(
         select(ActivityDay.day, func.sum(ActivityDay.read_seconds), func.sum(ActivityDay.cards_reviewed))
-        .group_by(ActivityDay.day))).all()
+        .where(ActivityDay.book_id.in_(mine)).group_by(ActivityDay.day))).all()
     per_day = {d: (int(s or 0), int(c or 0)) for d, s, c in rows}
     active = {d for d, (s, c) in per_day.items() if s >= ACTIVE_DAY_SECONDS or c > 0}
     daily = [{"day": (d := today - timedelta(days=i)).isoformat(), "seconds": per_day.get(d, (0, 0))[0],
               "cards": per_day.get(d, (0, 0))[1]} for i in range(days - 1, -1, -1)]
 
     seconds_by_book = dict((await db.execute(
-        select(ActivityDay.book_id, func.sum(ActivityDay.read_seconds)).group_by(ActivityDay.book_id))).all())
+        select(ActivityDay.book_id, func.sum(ActivityDay.read_seconds)).where(ActivityDay.book_id.in_(mine))
+        .group_by(ActivityDay.book_id))).all())
     chapter_counts = dict((await db.execute(
-        select(Chapter.book_id, func.count()).group_by(Chapter.book_id))).all())
+        select(Chapter.book_id, func.count()).where(Chapter.book_id.in_(mine)).group_by(Chapter.book_id))).all())
     highlight_counts = dict((await db.execute(
-        select(Note.book_id, func.count()).where(Note.kind == "passage").group_by(Note.book_id))).all())
+        select(Note.book_id, func.count()).where(Note.kind == "passage", Note.user_id == user_id)
+        .group_by(Note.book_id))).all())
     books = []
-    for b in (await db.execute(select(Book).where(Book.status == "ready"))).scalars():
+    for b in (await db.execute(select(Book).where(Book.status == "ready", Book.user_id == user_id))).scalars():
         total = chapter_counts.get(b.id, 0)
         books.append({
             "id": b.id, "title": b.title, "author": b.author, "seconds": int(seconds_by_book.get(b.id) or 0),
@@ -65,14 +69,15 @@ async def compute(db: AsyncSession, days: int = 30, today: date | None = None) -
         })
     books.sort(key=lambda x: (x["last_read"] or "", x["seconds"]), reverse=True)
 
-    attempts = [a for q in (await db.execute(select(Quiz.attempts))).scalars() for a in (q or [])]
+    attempts = [a for q in (await db.execute(select(Quiz.attempts).where(Quiz.user_id == user_id))).scalars()
+                for a in (q or [])]
     scores = [a["score"] / a["total"] for a in attempts if a.get("total")]
     now = datetime.now(timezone.utc)
     cards_total, cards_due, mastered = (await db.execute(select(
         func.count(Flashcard.id),
         func.count(Flashcard.id).filter(Flashcard.due_at <= now),
         func.count(Flashcard.id).filter(Flashcard.interval_days >= 21),
-    ))).one()
+    ).where(Flashcard.user_id == user_id))).one()
 
     return {
         "today_seconds": per_day.get(today, (0, 0))[0],

@@ -78,6 +78,16 @@ export interface ChatMessage {
   error?: string;
 }
 
+export interface User {
+  id: number;
+  email: string;
+  display_name: string;
+  is_admin: boolean;
+  email_verified: boolean;
+  settings: Record<string, unknown>;
+  created_at: string | null;
+}
+
 export interface ConversationSummary {
   id: number;
   title: string;

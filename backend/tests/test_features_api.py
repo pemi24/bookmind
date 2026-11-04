@@ -11,6 +11,8 @@ import json
 import re
 
 import httpx
+
+from tests.conftest import signed_in
 import pytest
 
 from tests.test_retrieval_api import BOOK, C1, C2, C3, _wait_ready
@@ -129,7 +131,7 @@ async def _wait_job(client, book_id, kind, timeout=60):
 async def test_features_end_to_end(test_db, fake_llm):
     from app.main import app
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=60) as c:
+    async with signed_in(app) as c:
         r = await c.post("/api/books", files={"file": ("lh.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")})
         book_id = r.json()["id"]
         assert (await _wait_ready(c, book_id))["status"] == "ready"

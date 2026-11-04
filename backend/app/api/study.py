@@ -11,13 +11,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.books import get_book_or_404
+from app.auth import scope
+from app.auth.deps import CurrentUser, current_user
 from app.api.features import effective_max_chapter, require_llm
 from app.db.models import Chapter, Chunk, Flashcard, Quiz
 from app.db.session import get_db
 from app.features import stats, study
 from app.features.common import get_chapter, ready_book
 
-router = APIRouter(prefix="/api", tags=["study"])
+router = APIRouter(prefix="/api", tags=["study"], dependencies=[Depends(current_user)])
 
 
 class QuizRequest(BaseModel):
@@ -36,8 +39,8 @@ def _quiz_summary(q: Quiz) -> dict:
 
 
 @router.post("/books/{book_id}/quizzes", status_code=201)
-async def create_quiz(book_id: int, req: QuizRequest, db: AsyncSession = Depends(get_db)):
-    book = await ready_book(db, book_id)
+async def create_quiz(user: CurrentUser, book_id: int, req: QuizRequest, db: AsyncSession = Depends(get_db)):
+    book = await ready_book(db, book_id, user)
     require_llm()
     max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
     if req.chapter_id is not None:
@@ -55,18 +58,18 @@ async def _furthest_chapters(db: AsyncSession, quizzes: list[Quiz]) -> dict[int,
 
 
 @router.get("/books/{book_id}/quizzes")
-async def list_quizzes(book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
+async def list_quizzes(user: CurrentUser, book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
     """Quizzes, hiding those that draw on chapters beyond the spoiler limit."""
-    rows = list((await db.execute(select(Quiz).where(Quiz.book_id == book_id).order_by(Quiz.id.desc()))).scalars())
+    await get_book_or_404(db, book_id, user)
+    rows = list((await db.execute(select(Quiz).where(Quiz.book_id == book_id, Quiz.user_id == user.id)
+                                  .order_by(Quiz.id.desc()))).scalars())
     furthest = await _furthest_chapters(db, rows)
     return [_quiz_summary(q) for q in rows if max_chapter is None or furthest[q.id] <= max_chapter]
 
 
 @router.get("/quizzes/{quiz_id}")
-async def get_quiz(quiz_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
-    quiz = await db.get(Quiz, quiz_id)
-    if quiz is None:
-        raise HTTPException(404, "Quiz not found.")
+async def get_quiz(user: CurrentUser, quiz_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
+    quiz = await scope.quiz(db, quiz_id, user)
     if max_chapter is not None and (await _furthest_chapters(db, [quiz]))[quiz.id] > max_chapter:
         raise HTTPException(403, "Spoiler guard: this quiz covers chapters you haven't reached yet.")
     return {**_quiz_summary(quiz), "questions": [study.public_question(q, i) for i, q in enumerate(quiz.questions)]}
@@ -77,10 +80,8 @@ class QuizSubmission(BaseModel):
 
 
 @router.post("/quizzes/{quiz_id}/submit")
-async def submit_quiz(quiz_id: int, sub: QuizSubmission, db: AsyncSession = Depends(get_db)):
-    quiz = await db.get(Quiz, quiz_id)
-    if quiz is None:
-        raise HTTPException(404, "Quiz not found.")
+async def submit_quiz(user: CurrentUser, quiz_id: int, sub: QuizSubmission, db: AsyncSession = Depends(get_db)):
+    quiz = await scope.quiz(db, quiz_id, user)
     if any(q["type"] == "short_answer" for q in quiz.questions):
         require_llm()
     result = await study.grade_quiz(db, quiz, sub.answers)
@@ -95,10 +96,8 @@ async def submit_quiz(quiz_id: int, sub: QuizSubmission, db: AsyncSession = Depe
 
 
 @router.delete("/quizzes/{quiz_id}", status_code=204)
-async def delete_quiz(quiz_id: int, db: AsyncSession = Depends(get_db)):
-    quiz = await db.get(Quiz, quiz_id)
-    if quiz is None:
-        raise HTTPException(404, "Quiz not found.")
+async def delete_quiz(user: CurrentUser, quiz_id: int, db: AsyncSession = Depends(get_db)):
+    quiz = await scope.quiz(db, quiz_id, user)
     await db.delete(quiz)
     await db.commit()
 
@@ -121,8 +120,8 @@ def _card(c: Flashcard, chunk: Chunk | None = None) -> dict:
 
 
 @router.post("/books/{book_id}/flashcards", status_code=201)
-async def create_cards(book_id: int, req: CardsRequest, db: AsyncSession = Depends(get_db)):
-    book = await ready_book(db, book_id)
+async def create_cards(user: CurrentUser, book_id: int, req: CardsRequest, db: AsyncSession = Depends(get_db)):
+    book = await ready_book(db, book_id, user)
     require_llm()
     max_ch = await effective_max_chapter(db, book_id, req.max_chapter)
     if req.chapter_id is not None:
@@ -132,9 +131,10 @@ async def create_cards(book_id: int, req: CardsRequest, db: AsyncSession = Depen
 
 
 @router.get("/books/{book_id}/flashcards")
-async def list_cards(book_id: int, due_only: bool = False, db: AsyncSession = Depends(get_db)):
+async def list_cards(user: CurrentUser, book_id: int, due_only: bool = False, db: AsyncSession = Depends(get_db)):
+    await get_book_or_404(db, book_id, user)
     stmt = (select(Flashcard, Chunk).outerjoin(Chunk, Chunk.id == Flashcard.chunk_id)
-            .where(Flashcard.book_id == book_id).order_by(Flashcard.due_at, Flashcard.id))
+            .where(Flashcard.book_id == book_id, Flashcard.user_id == user.id).order_by(Flashcard.due_at, Flashcard.id))
     if due_only:
         stmt = stmt.where(Flashcard.due_at <= datetime.now(timezone.utc))
     rows = (await db.execute(stmt)).all()
@@ -145,9 +145,9 @@ async def list_cards(book_id: int, due_only: bool = False, db: AsyncSession = De
 
 
 @router.get("/books/{book_id}/flashcards/export")
-async def export_cards(book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
+async def export_cards(user: CurrentUser, book_id: int, max_chapter: int | None = None, db: AsyncSession = Depends(get_db)):
     """Download the deck as an Anki import file (File → Import in Anki). Respects the spoiler limit."""
-    book = await ready_book(db, book_id)
+    book = await ready_book(db, book_id, user)
     stmt = (select(Flashcard, Chapter).outerjoin(Chapter, Chapter.id == Flashcard.chapter_id)
             .where(Flashcard.book_id == book_id).order_by(Chapter.position, Flashcard.id))
     if max_chapter is not None:
@@ -165,10 +165,8 @@ class ReviewRequest(BaseModel):
 
 
 @router.post("/flashcards/{card_id}/review")
-async def review_card(card_id: int, req: ReviewRequest, db: AsyncSession = Depends(get_db)):
-    card = await db.get(Flashcard, card_id)
-    if card is None:
-        raise HTTPException(404, "Flashcard not found.")
+async def review_card(user: CurrentUser, card_id: int, req: ReviewRequest, db: AsyncSession = Depends(get_db)):
+    card = await scope.flashcard(db, card_id, user)
     study.review(card, req.grade)
     await stats.add_activity(db, card.book_id, cards=1)
     await db.commit()
@@ -176,9 +174,7 @@ async def review_card(card_id: int, req: ReviewRequest, db: AsyncSession = Depen
 
 
 @router.delete("/flashcards/{card_id}", status_code=204)
-async def delete_card(card_id: int, db: AsyncSession = Depends(get_db)):
-    card = await db.get(Flashcard, card_id)
-    if card is None:
-        raise HTTPException(404, "Flashcard not found.")
+async def delete_card(user: CurrentUser, card_id: int, db: AsyncSession = Depends(get_db)):
+    card = await scope.flashcard(db, card_id, user)
     await db.delete(card)
     await db.commit()

@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    FetchedValue,
     ARRAY,
     Boolean,
     Computed,
@@ -39,6 +40,13 @@ def _book_fk() -> Mapped[int]:
     return mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
 
 
+def _user_fk() -> Mapped[int]:
+    # Filled in by a database trigger from the row's book for child tables (see migration 0005), so
+    # background jobs can't create rows with the wrong owner. Required from migration 0006 on.
+    return mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+                         server_default=FetchedValue())
+
+
 class AppMeta(Base):
     """Key/value facts about the schema (e.g. embedding dimension) checked at startup."""
 
@@ -47,10 +55,58 @@ class AppMeta(Base):
     value: Mapped[str] = mapped_column(Text)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True)  # stored lower-case
+    display_name: Mapped[str] = mapped_column(String(100))
+    password_hash: Mapped[str | None] = mapped_column(Text)  # None = can't sign in with a password yet
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # theme, AI provider...
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserSession(Base):
+    """A signed-in browser. The cookie holds a random token; only its SHA-256 is stored."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    csrf_hash: Mapped[str] = mapped_column(String(64))
+    remember: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+    ip: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AuthToken(Base):
+    """Single-use password-reset / email-verification token (only its SHA-256 is stored)."""
+
+    __tablename__ = "auth_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # reset | verify
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Book(Base):
     __tablename__ = "books"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _user_fk()
     title: Mapped[str] = mapped_column(String(500))
     author: Mapped[str | None] = mapped_column(String(500))
     filename: Mapped[str] = mapped_column(String(500))
@@ -136,6 +192,7 @@ class Conversation(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     # Primary book. Compare-mode conversations list all books in book_ids.
     book_id: Mapped[int] = _book_fk()
+    user_id: Mapped[int] = _user_fk()
     book_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
     title: Mapped[str] = mapped_column(String(300), default="New conversation")
     mode: Mapped[str] = mapped_column(String(20), default="chat")  # chat | persona | compare
@@ -178,6 +235,7 @@ class Note(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     book_id: Mapped[int] = _book_fk()
+    user_id: Mapped[int] = _user_fk()
     kind: Mapped[str] = mapped_column(String(20), default="note")  # note | answer | passage | quote
     title: Mapped[str | None] = mapped_column(String(300))
     content: Mapped[str] = mapped_column(Text)
@@ -243,6 +301,7 @@ class Quiz(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     book_id: Mapped[int] = _book_fk()
+    user_id: Mapped[int] = _user_fk()
     chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(300))
     # [{type, question, options?, answer, explanation, chunk_id}]
@@ -257,6 +316,7 @@ class Flashcard(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     book_id: Mapped[int] = _book_fk()
+    user_id: Mapped[int] = _user_fk()
     chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"))
     chunk_id: Mapped[int | None] = mapped_column(ForeignKey("chunks.id", ondelete="SET NULL"))
     front: Mapped[str] = mapped_column(Text)
@@ -274,6 +334,7 @@ class Entity(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     book_id: Mapped[int] = _book_fk()
+    user_id: Mapped[int] = _user_fk()
     kind: Mapped[str] = mapped_column(String(20))  # character | place | term | theme | concept
     name: Mapped[str] = mapped_column(String(300))
     aliases: Mapped[list[str]] = mapped_column(ARRAY(String(300)), default=list)
@@ -304,6 +365,7 @@ class TimelineEvent(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     book_id: Mapped[int] = _book_fk()
+    user_id: Mapped[int] = _user_fk()
     position: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text, default="")

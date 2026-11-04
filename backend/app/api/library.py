@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.deps import CurrentUser, current_user
 from app.api.chat import cited_markers, source_dict, sse
 from app.db.models import Book
 from app.db.session import SessionLocal, get_db
@@ -17,7 +18,7 @@ from app.llm.prompts import chat as chat_prompts
 from app.retrieval.hybrid import Passage, search_books
 
 log = logging.getLogger("bookmind")
-router = APIRouter(prefix="/api/library", tags=["library"])
+router = APIRouter(prefix="/api/library", tags=["library"], dependencies=[Depends(current_user)])
 
 
 class LibraryQuery(BaseModel):
@@ -28,8 +29,9 @@ class LibraryQuery(BaseModel):
     style: str = "default"
 
 
-async def _ready_ids(db: AsyncSession, wanted: list[int]) -> list[int]:
-    stmt = select(Book.id).where(Book.status == "ready").order_by(Book.id)
+async def _ready_ids(db: AsyncSession, wanted: list[int], user_id: int) -> list[int]:
+    """The user's indexed books (only those named in `wanted`, if given; other users' ids are ignored)."""
+    stmt = select(Book.id).where(Book.status == "ready", Book.user_id == user_id).order_by(Book.id)
     if wanted:
         stmt = stmt.where(Book.id.in_(wanted))
     ids = list((await db.execute(stmt)).scalars())
@@ -38,34 +40,36 @@ async def _ready_ids(db: AsyncSession, wanted: list[int]) -> list[int]:
     return ids
 
 
-async def _search(db: AsyncSession, req: LibraryQuery, per_book_k: int) -> list[Passage]:
-    ids = await _ready_ids(db, req.book_ids)
-    found = await search_books(db, req.q, ids, {b: req.max_chapters.get(b) for b in ids}, per_book_k=per_book_k)
+async def _search(db: AsyncSession, req: LibraryQuery, per_book_k: int, user_id: int) -> list[Passage]:
+    ids = await _ready_ids(db, req.book_ids, user_id)
+    found = await search_books(db, req.q, ids, {b: req.max_chapters.get(b) for b in ids}, per_book_k=per_book_k,
+                               user_id=user_id)
     # Re-ranker scores share one scale for a given query, so books can be merged by score.
     return sorted(found, key=lambda p: p.score, reverse=True)
 
 
 @router.post("/search")
-async def search_library(req: LibraryQuery, db: AsyncSession = Depends(get_db)):
-    passages = await _search(db, req, per_book_k=4)
+async def search_library(user: CurrentUser, req: LibraryQuery, db: AsyncSession = Depends(get_db)):
+    passages = await _search(db, req, per_book_k=4, user_id=user.id)
     return {"query": req.q, "results": [source_dict(i, p) for i, p in enumerate(passages[:30], start=1)]}
 
 
 @router.post("/ask")
-async def ask_library(req: LibraryQuery, db: AsyncSession = Depends(get_db)):
+async def ask_library(user: CurrentUser, req: LibraryQuery, db: AsyncSession = Depends(get_db)):
     """One-off question answered from passages across the library (not saved as a conversation)."""
     if not llm.llm_configured():
         raise HTTPException(503, llm.not_configured_message())
     if req.style not in chat_prompts.STYLES:
         raise HTTPException(400, f"Unknown style. Options: {', '.join(chat_prompts.STYLES)}")
-    ids = await _ready_ids(db, req.book_ids)
+    ids = await _ready_ids(db, req.book_ids, user.id)
+    uid = user.id
 
     async def stream():
         answer = ""
         try:
             yield sse("status", {"stage": "searching"})
             async with SessionLocal() as sdb:
-                found = await _search(sdb, req, per_book_k=4)
+                found = await _search(sdb, req, per_book_k=4, user_id=uid)
             passages = found[: llm.provider().default_top_k]
             sources = [source_dict(i, p) for i, p in enumerate(passages, start=1)]
             yield sse("sources", {"query": req.q, "sources": sources})

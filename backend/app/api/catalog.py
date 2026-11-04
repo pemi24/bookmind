@@ -8,24 +8,25 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.books import book_dict
+from app.auth.deps import CurrentUser, current_user
+from app.api.books import book_dict, check_book_quota, user_upload_dir
 from app.db.models import Book
 from app.db.session import get_db
 from app.features import catalog
 from app.ingestion.pipeline import schedule_ingestion, title_from_filename
 
-router = APIRouter(prefix="/api/catalog", tags=["catalog"])
+router = APIRouter(prefix="/api/catalog", tags=["catalog"], dependencies=[Depends(current_user)])
 
 SourceKey = Literal["gutenberg", "standard", "archive"]
 
 
 @router.get("/sources")
-async def list_sources():
+async def list_sources(user: CurrentUser):
     return [{"key": s.key, "name": s.name} for s in catalog.SOURCES]
 
 
 @router.get("/search")
-async def search_catalog(q: str = "", page: int = 1, sources: list[SourceKey] | None = Query(default=None)):
+async def search_catalog(user: CurrentUser, q: str = "", page: int = 1, sources: list[SourceKey] | None = Query(default=None)):
     """Search every source at once (or just `sources`). An empty query lists Gutenberg's most downloaded books."""
     try:
         return await catalog.search(q.strip()[:200], min(max(page, 1), 40), list(sources) if sources else None)
@@ -51,20 +52,21 @@ class ImportRequest(BaseModel):
 
 
 @router.post("/import", status_code=201)
-async def import_from_catalog(req: ImportRequest, db: AsyncSession = Depends(get_db)):
+async def import_from_catalog(user: CurrentUser, req: ImportRequest, db: AsyncSession = Depends(get_db)):
     prefix = catalog.download_prefix(req.source, req.id)
-    existing = await db.scalar(select(Book).where(Book.filename.startswith(prefix)))
+    existing = await db.scalar(select(Book).where(Book.user_id == user.id, Book.filename.startswith(prefix)))
     if existing is not None:
         raise HTTPException(409, f"“{existing.title}” is already in your library.")
     try:
-        got = await catalog.download(req.source, req.id)
+        await check_book_quota(db, user)
+        got = await catalog.download(req.source, req.id, user_upload_dir(user.id))
     except catalog.CatalogError as e:
         raise HTTPException(e.status, e.message) from e
     # Sources without metadata (Standard Ebooks) use the search result's title and author.
     title = got["title"] or req.title or title_from_filename(got["filename"])
     author = got["author"] or req.author
     book = Book(
-        title=title[:500], author=author[:500] if author else None,
+        user_id=user.id, title=title[:500], author=author[:500] if author else None,
         filename=got["filename"], file_path=str(got["path"]), file_type=got["ext"].lstrip("."), file_size=got["size"],
         status="pending", status_message="Queued", warnings=[], suggested_questions=[],
     )
