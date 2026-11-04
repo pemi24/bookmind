@@ -15,7 +15,8 @@ from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
 from app.auth.deps import current_user
-from app.api import account, admin, auth, books, catalog, chat, features, library, notes, stats, study
+from app.api import account, admin, auth, books, catalog, chat, features, library, notes, stats, study, tts
+from app.tts import get_registry
 from app.config import get_settings
 from app.db.models import AppMeta, Book
 from app.db.session import SessionLocal
@@ -103,8 +104,10 @@ async def lifespan(app: FastAPI):
         log.warning("will work once this is fixed (no restart needed for Ollama).")
         log.warning("=" * 70)
     warm = asyncio.create_task(asyncio.to_thread(_warm_models))
+    warm_voice = asyncio.create_task(get_registry().warm_default())
     yield
     warm.cancel()
+    warm_voice.cancel()
     await p.aclose()
 
 
@@ -114,8 +117,9 @@ app.add_middleware(
     allow_origins=[o.strip() for o in get_settings().cors_origins.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-TTS-Voice", "X-TTS-Note"],
 )
-for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats):
+for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats, tts):
     app.include_router(module.router)
 
 

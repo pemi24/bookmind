@@ -138,6 +138,37 @@ class Settings(BaseSettings):
     max_books_per_user: int = 50
     daily_message_limit: int = 300
 
+    # --- Text-to-speech (see app/tts/) ---
+    # Voice providers to offer, in order. Each one also needs its own setup (Piper: installed and
+    # voices downloaded; cloud ones: an API key) and is hidden otherwise. "browser" (the voices of
+    # the user's own browser/OS) needs nothing and is the fallback.
+    tts_providers: str = "piper,browser,openai,elevenlabs,google"
+    # Server default voice ("provider:voice"); empty = the first Piper voice, else the browser.
+    tts_default_voice: str = ""
+    tts_max_chars: int = 1500  # per synthesis request (the app sends a sentence or a few at a time)
+    tts_rate_limit: int = 150  # synthesis requests per user per minute
+    # Piper (local neural voices, offline). Download them with scripts/download_voices.py.
+    piper_voices_dir: Path = BACKEND_DIR / "data" / "voices"
+    # Which downloaded voices to offer (and which download_voices.py fetches); empty = every
+    # voice found in PIPER_VOICES_DIR.
+    # "medium" voices synthesize several times faster than real time on an ordinary CPU; "high"
+    # ones sound a little better but can be slower than real time, so reading would stutter.
+    piper_voices: str = ("en_US-lessac-medium,en_US-ryan-medium,en_US-amy-medium,"
+                         "en_GB-alba-medium,en_GB-northern_english_male-medium")
+    piper_workers: int = 2  # voices synthesizing at the same time (background threads)
+    # A voice takes several seconds to load and ~150 MB of memory once loaded; the least recently
+    # used one is unloaded beyond this many. The default voice is loaded at startup.
+    piper_max_loaded: int = 3
+    # Cloud voices: each appears only when its key is set.
+    openai_api_key: str = ""
+    openai_tts_model: str = "gpt-4o-mini-tts"
+    elevenlabs_api_key: str = ""
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    # Google voices use GEMINI_API_KEY, which chat answers already use: off unless you turn them
+    # on, so listening to books can't use up the free chat quota.
+    tts_google_enabled: bool = False
+    google_tts_model: str = "gemini-2.5-flash-preview-tts"
+
 
 @lru_cache
 def get_settings() -> Settings:
