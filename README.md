@@ -35,7 +35,7 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   example questions; book questions are always answered from retrieved passages only. A quick rule
   check handles obvious messages and a one-word classification by the AI handles the rest
   (uncertain = treated as a book question).
-* **Search your library** — passages from every book at once, or one answer drawn from all of them.
+* **Search your library** (the search bar on the Library page) — passages from every book at once, or one answer drawn from all of them.
 * **Answer styles** — normal, ELI5, student, expert, analogy.
 * **Spoiler guard** — "I've read up to chapter N", or **Follow my reading** to track the furthest
   chapter you've actually read in the reader; enforced in every database query.
@@ -297,7 +297,7 @@ BookMind still runs on your computer; the phone just opens it over your home Wi-
 
 1. Start it in LAN mode: **`start.bat lan`** (Windows) or **`./start.sh --lan`** (macOS/Linux).
    This builds the app and prints an address such as `http://192.168.1.20:8000`. Inside BookMind,
-   **Use on your phone** (bottom of the sidebar) shows the same address with a QR code to scan.
+   **Settings → Use on your phone** shows the same address with a QR code to scan.
 2. On the phone (same Wi-Fi), open that address.
    * **iPhone**: in Safari tap **Share → Add to Home Screen**.
    * **Android**: in Chrome tap **⋮ → Add to Home screen** (or **Install app**).

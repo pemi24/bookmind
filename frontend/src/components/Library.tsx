@@ -1,7 +1,8 @@
 import { AlertTriangle, BookOpenText, FileUp, Loader2, MessageSquare, MoreVertical, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Book } from "../types";
+import type { Book, PassageLoc } from "../types";
 import { coverGradient, formatBytes, formatDate, isIndexing } from "../utils";
+import LibrarySearch from "./LibrarySearch";
 
 const ACCEPT = ".pdf,.epub,.docx,.txt,.md,.markdown";
 
@@ -153,9 +154,11 @@ export default function Library({
   onReindex,
   onDelete,
   onResetReading,
+  onOpenPassage,
 }: {
   books: Book[];
   onUpload: (files: FileList | File[]) => void;
+  onOpenPassage: (loc: PassageLoc) => void;
   onOpen: (id: number) => void;
   onRead: (id: number) => void;
   onReindex: (id: number) => void;
@@ -212,6 +215,12 @@ export default function Library({
             }}
           />
         </div>
+
+        {books.length > 0 && (
+          <div className="mt-5">
+            <LibrarySearch books={books} onOpenPassage={onOpenPassage} />
+          </div>
+        )}
 
         {books.length === 0 ? (
           <button

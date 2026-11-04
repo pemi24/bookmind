@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { account, type AiOptions, type DeviceSession } from "../api";
 import type { Theme, User } from "../types";
 import { applyTheme } from "../utils";
+import PhoneAccess from "./PhoneAccess";
 import { Button, buttonClasses, ErrorBox } from "./ui";
 
 const input =
@@ -380,6 +381,9 @@ export default function SettingsPage({
         <Email user={user} onUser={onUser} />
         <Password onChanged={() => setDevicesKey((k) => k + 1)} />
         <Devices refreshKey={devicesKey} onSignOutEverywhere={() => onSignOut(true)} />
+        <Section title="Use on your phone" description="BookMind keeps running on this computer; your phone opens it over the same Wi-Fi.">
+          <PhoneAccess />
+        </Section>
         <Section title="Your data" description="A zip with your book files, notes, highlights, chats (with their sources), quizzes and flashcards.">
           <a href={account.exportUrl} download className={buttonClasses("secondary")}>
             <Download size={15} /> Download my data

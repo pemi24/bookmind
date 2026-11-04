@@ -1,14 +1,12 @@
-import { AlertTriangle, BarChart3, BookOpen, ChevronUp, Compass, Library as LibraryIcon, Loader2, LogOut, MonitorSmartphone, Moon, Settings, ShieldCheck, Search, Smartphone, Sun, Upload, X } from "lucide-react";
+import { AlertTriangle, BarChart3, BookOpen, ChevronUp, Compass, Library as LibraryIcon, Loader2, LogOut, MonitorSmartphone, Moon, Settings, ShieldCheck, Sun, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Book, User } from "../types";
 import { isIndexing } from "../utils";
-import PhoneAccess from "./PhoneAccess";
 
-export type Page = "library" | "discover" | "search" | "stats" | "settings" | "admin";
+export type Page = "library" | "discover" | "stats" | "settings" | "admin";
 
 const NAV: { page: Page; label: string; icon: typeof LibraryIcon; hash: string }[] = [
   { page: "library", label: "Library", icon: LibraryIcon, hash: "#/" },
-  { page: "search", label: "Search library", icon: Search, hash: "#/search" },
   { page: "discover", label: "Find free books", icon: Compass, hash: "#/discover" },
   { page: "stats", label: "Reading stats", icon: BarChart3, hash: "#/stats" },
 ];
@@ -42,7 +40,6 @@ export default function Sidebar({
   onClose?: () => void; // shown in the mobile drawer
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [phone, setPhone] = useState(false);
   return (
     <nav className="flex h-full flex-col border-r border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
       <div className="flex items-center gap-2 px-4 py-3">
@@ -122,16 +119,9 @@ export default function Sidebar({
           </li>
         ))}
       </ul>
-      <div className="space-y-0.5 border-t border-stone-200 p-3 dark:border-stone-800">
-        <button
-          onClick={() => setPhone(true)}
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-stone-600 transition hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
-        >
-          <Smartphone size={16} /> Use on your phone
-        </button>
+      <div className="border-t border-stone-200 p-3 dark:border-stone-800">
         <UserMenu user={user} onSignOut={onSignOut} onNavigate={onNavigateAccount} />
       </div>
-      {phone && <PhoneAccess onClose={() => setPhone(false)} />}
     </nav>
   );
 }

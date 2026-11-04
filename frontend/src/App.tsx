@@ -22,7 +22,6 @@ import BookMemory from "./components/BookMemory";
 import ChatPanel from "./components/ChatPanel";
 import Discover from "./components/Discover";
 import Library from "./components/Library";
-import LibrarySearch from "./components/LibrarySearch";
 import EssayPanel from "./components/panels/EssayPanel";
 import ExplorerPanel from "./components/panels/ExplorerPanel";
 import NotesPanel from "./components/panels/NotesPanel";
@@ -38,7 +37,7 @@ import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source, U
 import { applyTheme, isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
 
-/* ---------- hash router: #/  ·  #/discover|search|stats|settings|admin  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
+/* ---------- hash router: #/  ·  #/discover|stats|settings|admin  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
 const TABS = [
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "summaries", label: "Summaries", icon: FileText },
@@ -56,7 +55,7 @@ type Route =
   | { name: "book"; id: number; tab: Tab; read: boolean; target: PassageLoc | null };
 
 function parseHash(): Route {
-  const page = window.location.hash.match(/^#\/(discover|search|stats|settings|admin)\/?$/);
+  const page = window.location.hash.match(/^#\/(discover|stats|settings|admin)\/?$/); // anything else (incl. the old #/search) → library
   if (page) return { name: "page", page: page[1] as Page };
   const m = window.location.hash.match(/^#\/book\/(\d+)(?:\/([a-z]+))?(?:\?(.*))?$/);
   if (!m) return { name: "page", page: "library" };
@@ -424,7 +423,6 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
             </div>
             <div className="min-h-0 flex-1">
               {route.page === "discover" && <Discover books={books} onAdded={(b) => setBooks((bs) => [b, ...bs])} />}
-              {route.page === "search" && <LibrarySearch books={books} onOpenPassage={openPassage} />}
               {route.page === "stats" && <StatsPage onOpenBook={(id) => navigate(`#/book/${id}`)} />}
               {route.page === "settings" && <SettingsPage user={user} onUser={onUser} onSignOut={onSignOut} />}
               {route.page === "admin" && (user.is_admin ? <AdminPage /> : <p className="p-6 text-center text-stone-500">This page doesn't exist.</p>)}
@@ -437,6 +435,7 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
                   onReindex={reindex}
                   onDelete={remove}
                   onResetReading={resetReading}
+                  onOpenPassage={openPassage}
                 />
               )}
             </div>
