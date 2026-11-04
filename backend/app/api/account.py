@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.llm.providers import PROVIDERS, create_provider
+from app.tts import KNOWN as TTS_PROVIDERS
 
 router = APIRouter(prefix="/api/account", tags=["account"], dependencies=[Depends(current_user)])
 HOUR = 60 * 60
@@ -60,6 +61,18 @@ class PreferencesUpdate(BaseModel):
     theme: Literal["system", "light", "dark"] | None = None
     llm_provider: str | None = Field(default=None, max_length=30)  # "" = the server's default
     llm_model: str | None = Field(default=None, max_length=120)  # "" = the provider's default
+    # Listening: "provider:voice" ids ("" = the server's default voice), one for chat replies and
+    # one for reading books. Browser voice ids are only known to the browser, so they aren't checked
+    # against the server's list; a voice that has gone away falls back when it's used.
+    tts_chat_voice: str | None = Field(default=None, max_length=200)
+    tts_read_voice: str | None = Field(default=None, max_length=200)
+    tts_speed: float | None = Field(default=None, ge=0.5, le=2.0)
+    tts_pitch: float | None = Field(default=None, ge=0.5, le=2.0)  # browser voices only
+    tts_volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    tts_auto_read: bool | None = None  # read each new chat reply aloud
+
+
+_VOICE_ID = re.compile(r"(?:%s):[^\x00-\x1f]*" % "|".join(TTS_PROVIDERS))
 
 
 @router.get("/ai-options")
@@ -107,6 +120,16 @@ async def update_preferences(user: CurrentUser, req: PreferencesUpdate, db: Asyn
         if model and not re.fullmatch(r"[\w.:/@+-]+", model):
             raise HTTPException(422, "That doesn't look like a model name.")
         prefs["llm_model"] = model if prefs.get("llm_provider") else ""
+    for key in ("tts_chat_voice", "tts_read_voice"):
+        voice = getattr(req, key)
+        if voice is not None:
+            voice = voice.strip()
+            if voice and not _VOICE_ID.fullmatch(voice):
+                raise HTTPException(422, "That isn't a voice BookMind knows.")
+            prefs[key] = voice
+    for key in ("tts_speed", "tts_pitch", "tts_volume", "tts_auto_read"):
+        if (value := getattr(req, key)) is not None:
+            prefs[key] = value
     user.settings = prefs
     await db.commit()
     return {"user": user_dict(user)}

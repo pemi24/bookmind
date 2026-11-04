@@ -86,7 +86,18 @@ export interface User {
   display_name: string;
   is_admin: boolean;
   email_verified: boolean;
-  settings: { theme?: Theme; llm_provider?: string; llm_model?: string };
+  settings: {
+    theme?: Theme;
+    llm_provider?: string;
+    llm_model?: string;
+    // listening: "provider:voice" ids ("" = the server's default voice)
+    tts_chat_voice?: string;
+    tts_read_voice?: string;
+    tts_speed?: number;
+    tts_pitch?: number; // browser voices only
+    tts_volume?: number;
+    tts_auto_read?: boolean;
+  };
   created_at: string | null;
 }
 

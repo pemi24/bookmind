@@ -35,7 +35,6 @@ import type {
   Style,
   SummaryResult,
   TimelineEvent,
-  Theme,
   TranslationState,
   User,
 } from "./types";
@@ -139,7 +138,7 @@ export interface AdminUser {
 
 export const account = {
   updateProfile: (display_name: string) => request<{ user: User }>("/api/account/profile", json("PATCH", { display_name })),
-  updatePreferences: (prefs: { theme?: Theme; llm_provider?: string; llm_model?: string }) =>
+  updatePreferences: (prefs: Partial<User["settings"]>) =>
     request<{ user: User }>("/api/account/preferences", json("PATCH", prefs)),
   aiOptions: () => request<AiOptions>("/api/account/ai-options"),
   changeEmail: (email: string, password: string) => request<{ user: User }>("/api/account/email", json("POST", { email, password })),
@@ -149,6 +148,82 @@ export const account = {
   endSession: (id: number) => request<void>(`/api/account/sessions/${id}`, { method: "DELETE" }),
   exportUrl: "/api/account/export",
   deleteAccount: (password: string) => request<{ ok: boolean }>("/api/account/delete", json("POST", { password })),
+};
+
+/* ---------- text-to-speech ---------- */
+export interface TtsVoice {
+  id: string; // "provider:voice"
+  provider: string;
+  name: string;
+  language: string; // BCP 47, "" when it speaks many
+  accent: string;
+  gender: string; // female | male | ""
+  quality: string;
+}
+
+export interface TtsProvider {
+  id: string;
+  label: string;
+  available: boolean;
+  reason: string;
+  client_side: boolean; // browser voices: listed and played by the browser
+  supports_streaming: boolean;
+  speed_range: [number, number];
+  pitch: boolean;
+  volume: boolean;
+  voices: TtsVoice[];
+}
+
+export interface TtsCatalog {
+  providers: TtsProvider[];
+  default_voice: string;
+  max_chars: number;
+}
+
+/** No voice on the server could speak: the app reads with the browser's own voices instead. */
+export class TtsUnavailable extends ApiError {}
+
+export interface SpokenAudio {
+  blob: Blob;
+  voice: string; // the voice that actually spoke
+  note: string | null; // why it isn't the one asked for
+}
+
+async function fetchAudio(path: string, init: RequestInit = {}): Promise<SpokenAudio> {
+  let res: Response;
+  try {
+    res = await apiFetch(path, init);
+  } catch (e) {
+    if ((e as Error).name === "AbortError") throw e;
+    throw new ApiError("Can't reach the BookMind backend. Is it running?", 0);
+  }
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    let fallback = false;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = body.detail;
+      fallback = body.fallback === "browser";
+    } catch {
+      /* not JSON */
+    }
+    throw fallback ? new TtsUnavailable(detail, res.status) : new ApiError(detail, res.status);
+  }
+  const header = (name: string) => {
+    const v = res.headers.get(name);
+    return v ? decodeURIComponent(v) : null;
+  };
+  return { blob: await res.blob(), voice: header("X-TTS-Voice") ?? "", note: header("X-TTS-Note") };
+}
+
+export const tts = {
+  voices: () => request<TtsCatalog>("/api/tts/voices"),
+  /** Speakable sentences; markdown = an AI reply (markdown, citation markers, URLs and emoji removed). */
+  sentences: (text: string, markdown = true) => request<{ sentences: string[] }>("/api/tts/sentences", json("POST", { text, markdown })),
+  speak: (body: { text: string; voice: string; speed: number; volume?: number }, signal?: AbortSignal) =>
+    fetchAudio("/api/tts/speak", { ...json("POST", body), signal }),
+  preview: (voice: string, speed: number, signal?: AbortSignal) =>
+    fetchAudio(`/api/tts/preview?${new URLSearchParams({ voice, speed: String(speed) })}`, { signal }),
 };
 
 export const admin = {

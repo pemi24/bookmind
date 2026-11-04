@@ -3,7 +3,9 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { account, type AiOptions, type DeviceSession } from "../api";
 import type { Theme, User } from "../types";
 import { applyTheme } from "../utils";
+import { resolveVoice, useVoiceCatalog, voicePrefs, type VoicePrefs } from "../audio/voices";
 import PhoneAccess from "./PhoneAccess";
+import { AudioSlider, formatPercent, formatSpeed, PreviewButton, VoiceSelect } from "./VoicePicker";
 import { Button, buttonClasses, ErrorBox } from "./ui";
 
 const input =
@@ -256,6 +258,95 @@ function AiModel({ user, onUser }: { user: User; onUser: (u: User) => void }) {
   );
 }
 
+function Listening({ user, onUser }: { user: User; onUser: (u: User) => void }) {
+  const catalog = useVoiceCatalog();
+  const saved = voicePrefs(user);
+  const [prefs, setPrefs] = useState(saved);
+  const set = (change: Partial<VoicePrefs>) => setPrefs((p) => ({ ...p, ...change }));
+  const s = useSave();
+  const chat = resolveVoice(catalog, prefs.chatVoice);
+  const read = resolveVoice(catalog, prefs.readVoice);
+  const sound = { rate: prefs.speed, pitch: prefs.pitch, volume: prefs.volume };
+  const browserChosen = [chat, read].some((v) => v.id.startsWith("browser:"));
+  const changed = (Object.keys(prefs) as (keyof VoicePrefs)[]).some((k) => prefs[k] !== saved[k]);
+  const unavailable = catalog.providers.filter((p) => !p.available && !p.client_side);
+
+  const voiceField = (label: string, key: "chatVoice" | "readVoice", resolved: typeof chat) => (
+    <div>
+      <label htmlFor={`voice-${key}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
+        {label}
+      </label>
+      <div className="flex flex-wrap items-start gap-2">
+        <VoiceSelect id={`voice-${key}`} catalog={catalog} value={prefs[key]} onChange={(v) => set({ [key]: v })} className="flex-1 basis-60" />
+        <PreviewButton catalog={catalog} voiceId={resolved.id} sound={sound} />
+      </div>
+      {resolved.notice && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{resolved.notice}</p>}
+    </div>
+  );
+
+  return (
+    <Section title="Listening" description="The voices that read chat replies and books aloud. Saved to your account, so they follow you to other devices.">
+      <form
+        onSubmit={s.run(async () => {
+          onUser(
+            (
+              await account.updatePreferences({
+                tts_chat_voice: prefs.chatVoice,
+                tts_read_voice: prefs.readVoice,
+                tts_speed: prefs.speed,
+                tts_pitch: prefs.pitch,
+                tts_volume: prefs.volume,
+                tts_auto_read: prefs.autoRead,
+              })
+            ).user,
+          );
+          return "Saved.";
+        })}
+        className="space-y-4"
+      >
+        {catalog.error && <ErrorBox>Couldn't load this server's voices ({catalog.error}). This device's own voices still work.</ErrorBox>}
+        {voiceField("Voice for chat replies", "chatVoice", chat)}
+        {voiceField("Voice for reading books", "readVoice", read)}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <AudioSlider label="Speed" value={prefs.speed} onChange={(speed) => set({ speed })} min={0.5} max={2} step={0.05} format={formatSpeed} />
+          <AudioSlider
+            label="Pitch"
+            value={prefs.pitch}
+            onChange={(pitch) => set({ pitch })}
+            min={0.5}
+            max={2}
+            step={0.05}
+            format={formatSpeed}
+            disabled={!browserChosen}
+            hint="Device voices only."
+          />
+          <AudioSlider label="Volume" value={prefs.volume} onChange={(volume) => set({ volume })} min={0} max={1} step={0.05} format={formatPercent} />
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" checked={prefs.autoRead} onChange={(e) => set({ autoRead: e.target.checked })} className="mt-0.5 accent-brand-600" />
+          <span>
+            Read new chat replies aloud automatically
+            <span className="block text-xs text-stone-500">Each answer starts playing as soon as its first sentence is ready.</span>
+          </span>
+        </label>
+        {unavailable.length > 0 && (
+          <ul className="space-y-0.5 text-xs text-stone-500">
+            {unavailable.map((p) => (
+              <li key={p.id}>
+                {p.label}: {p.reason}
+              </li>
+            ))}
+          </ul>
+        )}
+        <Button variant="primary" loading={s.busy} disabled={!changed}>
+          Save
+        </Button>
+      </form>
+      {s.status}
+    </Section>
+  );
+}
+
 function deviceName(ua: string | null): { label: string; phone: boolean } {
   if (!ua) return { label: "Unknown device", phone: false };
   const browser = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
@@ -378,6 +469,7 @@ export default function SettingsPage({
         <Profile user={user} onUser={onUser} />
         <Appearance user={user} onUser={onUser} />
         <AiModel user={user} onUser={onUser} />
+        <Listening user={user} onUser={onUser} />
         <Email user={user} onUser={onUser} />
         <Password onChanged={() => setDevicesKey((k) => k + 1)} />
         <Devices refreshKey={devicesKey} onSignOutEverywhere={() => onSignOut(true)} />

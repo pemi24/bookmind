@@ -296,6 +296,25 @@ async def test_api_falls_back_to_browser_when_nothing_can_speak(test_db, monkeyp
         assert "this device's voices" in r.json()["detail"]
 
 
+@pytestmark_api
+async def test_voice_preferences_are_saved_per_account(test_db):
+    async with signed_in(_app()) as a, signed_in(_app()) as b:
+        prefs = {"tts_chat_voice": "piper:en_GB-alba-medium", "tts_read_voice": "browser:Microsoft Zira - English",
+                 "tts_speed": 1.25, "tts_pitch": 0.9, "tts_volume": 0.8, "tts_auto_read": True}
+        r = await a.patch("/api/account/preferences", json=prefs)
+        assert r.status_code == 200 and {k: r.json()["user"]["settings"][k] for k in prefs} == prefs
+        assert {k: (await a.get("/api/auth/me")).json()["user"]["settings"][k] for k in prefs} == prefs
+        # other preferences are untouched, and other accounts keep their own
+        assert (await a.patch("/api/account/preferences", json={"theme": "dark"})).json()["user"]["settings"]["tts_speed"] == 1.25
+        assert "tts_chat_voice" not in (await b.get("/api/auth/me")).json()["user"]["settings"]
+        # "" = back to the server's default voice
+        r = await a.patch("/api/account/preferences", json={"tts_chat_voice": ""})
+        assert r.json()["user"]["settings"]["tts_chat_voice"] == ""
+        for bad in ({"tts_chat_voice": "skynet:hal"}, {"tts_read_voice": "piper"}, {"tts_speed": 3},
+                    {"tts_volume": -1}, {"tts_chat_voice": "piper:a\nb"}):
+            assert (await a.patch("/api/account/preferences", json=bad)).status_code == 422, bad
+
+
 # ---------- real Piper (opt-in) ----------
 
 
