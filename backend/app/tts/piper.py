@@ -15,7 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.config import Settings
-from app.tts.base import Audio, ProviderInfo, TTSError, TTSProvider, Voice, wav_bytes
+from app.tts.base import Audio, ProviderInfo, TTSError, TTSProvider, Voice
+from app.tts.encode import pcm_audio
 
 # Voice configs don't say who is speaking; these are the common English and French voices.
 _GENDER = {
@@ -53,6 +54,7 @@ class PiperProvider(TTSProvider):
         self.dir = Path(settings.piper_voices_dir)
         self.wanted = [v.strip() for v in settings.piper_voices.split(",") if v.strip()]
         self.max_loaded = max(1, settings.piper_max_loaded)
+        self.format, self.bitrate = settings.tts_audio_format, settings.tts_mp3_bitrate
         self._pool = ThreadPoolExecutor(max_workers=max(1, settings.piper_workers), thread_name_prefix="piper")
         self._loaded: OrderedDict[str, object] = OrderedDict()  # least recently used first
         self._lock = threading.Lock()  # guards _loaded and _loading
@@ -119,7 +121,7 @@ class PiperProvider(TTSProvider):
         """Load a voice in the background so its first sentence starts quickly."""
         await asyncio.get_running_loop().run_in_executor(self._pool, self._load, key)
 
-    def _run(self, text: str, key: str, speed: float, volume: float) -> bytes:
+    def _run(self, text: str, key: str, speed: float, volume: float) -> Audio:
         from piper import SynthesisConfig
 
         voice = self._load(key)
@@ -128,17 +130,16 @@ class PiperProvider(TTSProvider):
         for chunk in voice.synthesize(text, syn_config=config):
             rate = chunk.sample_rate
             pcm += chunk.audio_int16_bytes
-        return wav_bytes(bytes(pcm), rate)
+        return pcm_audio(bytes(pcm), rate, self.format, self.bitrate)  # encoded here, on the pool thread
 
     async def synthesize(self, text: str, voice: str, speed: float = 1.0, volume: float = 1.0) -> Audio:
         if not piper_installed():
             raise TTSError("Piper isn't installed.")
         loop = asyncio.get_running_loop()
         try:
-            data = await loop.run_in_executor(self._pool, self._run, text, voice, self.clamp_speed(speed),
+            return await loop.run_in_executor(self._pool, self._run, text, voice, self.clamp_speed(speed),
                                               min(2.0, max(0.0, volume)))
         except TTSError:
             raise
         except Exception as e:  # noqa: BLE001 - a broken model file, out of memory...
             raise TTSError(f"Piper couldn't speak with '{voice}': {e}") from e
-        return Audio(data, "audio/wav")

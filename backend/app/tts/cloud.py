@@ -2,13 +2,15 @@
 API key is in backend/.env (Google also needs TTS_GOOGLE_ENABLED=true)."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import re
 
 import httpx
 
 from app.config import Settings
-from app.tts.base import Audio, ProviderInfo, TTSError, TTSProvider, Voice, wav_bytes
+from app.tts.base import Audio, ProviderInfo, TTSError, TTSProvider, Voice
+from app.tts.encode import pcm_audio
 
 _TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 
@@ -136,4 +138,6 @@ class GoogleProvider(_Cloud):
         except (KeyError, IndexError, ValueError) as e:
             raise TTSError("Google voices: the reply had no audio.") from e
         rate = re.search(r"rate=(\d+)", part.get("mimeType", ""))
-        return Audio(wav_bytes(base64.b64decode(part["data"]), int(rate.group(1)) if rate else 24000), "audio/wav")
+        pcm, rate = base64.b64decode(part["data"]), int(rate.group(1)) if rate else 24000
+        s = self.settings
+        return await asyncio.to_thread(pcm_audio, pcm, rate, s.tts_audio_format, s.tts_mp3_bitrate)

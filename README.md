@@ -309,9 +309,13 @@ listening to a book would use up the free chat quota. Cloud voices receive the t
 and a hash of the text. Hearing it again — re-reading a page, a voice preview, a reply — plays
 at once and doesn't count toward the listening rate limit. Each account has its own entries, so
 nobody gets another account's audio, and deleting an account deletes its audio. The cache is
-capped by `TTS_CACHE_MAX_MB` (1000 MB, about 6 hours of Piper audio; the least recently played
+capped by `TTS_CACHE_MAX_MB` (1000 MB, about 50 hours of Piper audio; the least recently played
 files go first) and `TTS_CACHE_MAX_AGE_DAYS` (60). Set `TTS_CACHE_ENABLED=false` to turn it off.
-Device voices are never cached (the browser speaks them itself).
+Device voices are never cached (the browser speaks them itself). Speech made on the server (Piper,
+Google) is sent and saved as MP3 (`TTS_AUDIO_FORMAT=mp3`, `TTS_MP3_BITRATE=40` kbps), about 9x
+smaller than WAV and still gapless between sentences; this uses the small `lameenc` package from
+`requirements.txt`. Without it, or with `TTS_AUDIO_FORMAT=wav`, clips stay uncompressed WAV
+(~6 hours in 1000 MB).
 
 ---
 

@@ -15,7 +15,10 @@ from app.config import get_settings
 from app.tts import BROWSER, Registry
 from app.tts.base import Audio, ProviderInfo, TTSError, TTSProvider, Voice
 from app.tts.text import clean_for_speech, split_sentences
+from app.tts.encode import mp3_available
 from tests.conftest import signed_in
+
+needs_lameenc = pytest.mark.skipif(not mp3_available(), reason="lameenc isn't installed")
 
 # ---------- text ----------
 
@@ -211,15 +214,96 @@ async def test_openai_request_and_errors():
 
 
 @pytest.mark.asyncio
-async def test_google_wraps_pcm_in_wav():
+async def test_google_pcm_becomes_wav_or_mp3():
     from app.tts.cloud import GoogleProvider
 
     pcm = b"\x00\x01" * 100
     body = {"candidates": [{"content": {"parts": [{"inlineData": {
         "mimeType": "audio/L16;codec=pcm;rate=24000", "data": base64.b64encode(pcm).decode()}}]}}]}
-    s = get_settings().model_copy(update={"gemini_api_key": "g"})
+    s = get_settings().model_copy(update={"gemini_api_key": "g", "tts_audio_format": "wav"})
     audio = await GoogleProvider(s, httpx.MockTransport(lambda r: httpx.Response(200, json=body))).synthesize("Hi.", "Kore")
     assert audio.mime == "audio/wav" and audio.data.startswith(b"RIFF") and audio.data.endswith(pcm)
+    if mp3_available():
+        s = s.model_copy(update={"tts_audio_format": "mp3"})
+        audio = await GoogleProvider(s, httpx.MockTransport(lambda r: httpx.Response(200, json=body))).synthesize("Hi.", "Kore")
+        assert audio.mime == "audio/mpeg" and _lame_tag(audio.data)["rate"] == 24000
+
+
+# ---------- compressed audio ----------
+
+
+def _speechlike(seconds: float, rate: int = 22050) -> bytes:
+    """Mono 16-bit PCM that isn't trivially compressible: a wobbling tone with noise."""
+    import math
+    import random
+    import struct
+
+    rnd = random.Random(1)
+    n = int(round(seconds * rate))
+    return b"".join(struct.pack("<h", int(6000 * math.sin(i * (0.05 + 0.02 * math.sin(i / 3000))) + rnd.randint(-800, 800)))
+                    for i in range(n))
+
+
+def _lame_tag(mp3: bytes) -> dict:
+    """What a browser reads from the Info frame: frame count, size, encoder delay and padding."""
+    from app.tts.encode import _crc16, _frame
+
+    size, per_frame, rate, side = _frame(mp3[:4])
+    t = 4 + side
+    assert mp3[t:t + 4] == b"Info" and mp3[t + 120:t + 129] == b"LAME3.100"
+    lame = t + 120
+    v = int.from_bytes(mp3[lame + 21:lame + 24], "big")
+    assert int.from_bytes(mp3[lame + 34:lame + 36], "big") == _crc16(mp3[:lame + 34])  # tag CRC
+    assert int.from_bytes(mp3[lame + 32:lame + 34], "big") == _crc16(mp3[size:])  # music CRC
+    frames, at = 0, size
+    while at < len(mp3):
+        at += _frame(mp3[at:at + 4])[0]
+        frames += 1
+    assert at == len(mp3)
+    return {"frames": int.from_bytes(mp3[t + 8:t + 12], "big"), "counted": frames, "per_frame": per_frame, "rate": rate,
+            "bytes": int.from_bytes(mp3[t + 12:t + 16], "big"), "delay": v >> 12, "padding": v & 0xFFF}
+
+
+@needs_lameenc
+def test_mp3_is_much_smaller_and_records_its_exact_length():
+    from app.tts.base import wav_bytes
+    from app.tts.encode import pcm_audio
+
+    pcm = _speechlike(3.0)
+    audio = pcm_audio(pcm, 22050, "mp3", 40)
+    assert audio.mime == "audio/mpeg"
+    assert len(wav_bytes(pcm, 22050)) / len(audio.data) > 8
+    tag = _lame_tag(audio.data)
+    assert tag["frames"] == tag["counted"] and tag["bytes"] == len(audio.data) and tag["rate"] == 22050
+    # decoders drop the delay and padding: what's left is exactly the PCM that went in (gapless)
+    assert tag["delay"] == 576 and tag["frames"] * tag["per_frame"] - tag["delay"] - tag["padding"] == len(pcm) // 2
+
+
+@needs_lameenc
+def test_mp3_of_a_very_short_clip_and_other_rates():
+    from app.tts.encode import pcm_audio
+
+    for rate, samples in ((22050, 1), (16000, 700), (24000, 24000), (44100, 5000)):
+        tag = _lame_tag(pcm_audio(_speechlike(samples / rate, rate), rate, "mp3", 40).data)
+        assert tag["rate"] == rate
+        assert tag["frames"] * tag["per_frame"] - tag["delay"] - tag["padding"] == samples
+
+
+def test_wav_when_asked_or_when_lameenc_is_missing(monkeypatch):
+    from app.tts import encode
+
+    pcm = _speechlike(0.2)
+    assert encode.pcm_audio(pcm, 22050, "wav").mime == "audio/wav"
+    monkeypatch.setattr(encode, "mp3_available", lambda: False)
+    audio = encode.pcm_audio(pcm, 22050, "mp3")
+    assert audio.mime == "audio/wav" and audio.data.startswith(b"RIFF") and audio.data.endswith(pcm)
+
+    def broken(*a, **k):
+        raise ValueError("odd sample rate")
+
+    monkeypatch.setattr(encode, "mp3_available", lambda: True)
+    monkeypatch.setattr(encode, "encode_mp3", broken)
+    assert encode.pcm_audio(pcm, 22050, "mp3").mime == "audio/wav"  # still plays
 
 
 @pytest.mark.asyncio
@@ -499,6 +583,20 @@ async def test_cache_prunes_old_and_least_recently_used(test_db, monkeypatch):
 
 
 @pytestmark_api
+async def test_cache_saves_mp3_as_mp3(test_db):
+    from app.db.session import SessionLocal
+    from app.tts import cache as audio_cache
+
+    clip = Audio(b"\xff\xf3mp3", "audio/mpeg")
+    async with signed_in(_app()) as a:
+        uid = a.user["id"]
+        async with SessionLocal() as db:
+            await audio_cache.put(db, uid, "piper:a", 1.0, "An mp3 sentence.", clip)
+            assert await audio_cache.get(db, uid, "piper:a", 1.0, "An mp3 sentence.") == clip
+        assert [f.suffix for f in audio_cache.user_dir(uid).iterdir()] == [".mp3"]
+
+
+@pytestmark_api
 async def test_cache_entry_with_missing_file_is_synthesized_again(test_db, fake_registry):
     from app.tts import cache as audio_cache
 
@@ -527,4 +625,8 @@ async def test_real_piper_voice_speaks():
     key = info.voices[0].id.partition(":")[2]
     normal = await p.synthesize("The fox waited for spring.", key, 1.0)
     fast = await p.synthesize("The fox waited for spring.", key, 2.0)
-    assert normal.data[:4] == b"RIFF" and len(fast.data) < len(normal.data) * 0.75
+    if mp3_available() and get_settings().tts_audio_format == "mp3":
+        assert normal.mime == "audio/mpeg" and _lame_tag(normal.data)["delay"] == 576
+    else:
+        assert normal.data[:4] == b"RIFF"
+    assert len(fast.data) < len(normal.data) * 0.75

@@ -152,8 +152,12 @@ class Settings(BaseSettings):
     # TTS_CACHE_MAX_AGE_DAYS go too (0 = no age limit).
     tts_cache_enabled: bool = True
     tts_cache_dir: Path = BACKEND_DIR / "data" / "tts_cache"
-    tts_cache_max_mb: int = 1000  # all users together; about 6 hours of Piper audio
+    tts_cache_max_mb: int = 1000  # all users together; about 50 hours of Piper audio as MP3 (6 as WAV)
     tts_cache_max_age_days: int = 60
+    # Speech synthesized here (Piper, Google) is sent and cached as "mp3" (needs lameenc; ~9x
+    # smaller, gapless) or "wav" (uncompressed). Without lameenc it falls back to WAV.
+    tts_audio_format: str = "mp3"
+    tts_mp3_bitrate: int = 40  # kbps, constant; 32-64 suit speech
     # Piper (local neural voices, offline). Download them with scripts/download_voices.py.
     piper_voices_dir: Path = BACKEND_DIR / "data" / "voices"
     # Which downloaded voices to offer (and which download_voices.py fetches); empty = every

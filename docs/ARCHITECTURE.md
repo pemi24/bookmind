@@ -204,6 +204,15 @@ To add a provider: subclass `LLMProvider` in `app/llm/providers/`, implement `st
   `TTS_RATE_LIMIT`. Entries are per user (rows cascade with the account, files are deleted with
   it). `prune()` runs at start-up and whenever enough new audio was written: entries unused for
   `TTS_CACHE_MAX_AGE_DAYS`, then the least recently played until under 90% of `TTS_CACHE_MAX_MB`.
+* **Audio format** (`tts/encode.py`): Piper and Google return raw 16-bit PCM; `pcm_audio()` turns
+  it into CBR MP3 with `lameenc` (`TTS_AUDIO_FORMAT=mp3`, `TTS_MP3_BITRATE`, default 40 kbps:
+  ~5 KB/s instead of WAV's ~44 KB/s), or WAV when lameenc is missing or `TTS_AUDIO_FORMAT=wav`.
+  It runs on Piper's thread pool (Google: `asyncio.to_thread`), a few ms per sentence. An MP3
+  encoder adds silence at both ends of each clip (576 samples of encoder delay, padding to a whole
+  frame: 50-70 ms per sentence at 22 kHz); each file therefore starts with a LAME "Info" frame
+  recording the exact delay and padding, which browsers use to drop it (measured in Chromium:
+  decoded length equals the PCM length, and the silences between sentences match WAV). Cached
+  entries keep their own MIME type, so WAV files saved earlier still play.
 * **Preferences** (chat voice, reading voice, speed, pitch, volume, auto-read) live in
   `users.settings`. Every TTS endpoint requires sign-in; chapters and listening positions of other
   accounts' books answer 404. `TTS_MAX_CHARS` bounds a synthesis request.
