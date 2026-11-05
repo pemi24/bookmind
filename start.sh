@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # BookMind launcher (macOS/Linux): installs dependencies on first run, then starts backend + frontend.
-# ./start.sh --lan  also lets phones on the same Wi-Fi open (and install) BookMind.
+# ./start.sh --lan          also lets phones on the same Wi-Fi open (and install) BookMind.
+# ./start.sh --lan --https  ...and adds a secure https:// address (needed for the offline app).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -32,9 +33,11 @@ backend/.venv/bin/python backend/scripts/check_llm.py || true
 if [ "${1:-}" = "--lan" ]; then
   echo "Building the app for phones..."
   (cd frontend && npm run build)
+  export HOST=0.0.0.0
+  if [ "${2:-}" = "--https" ]; then export HTTPS=true; fi
   backend/.venv/bin/python backend/scripts/lan_info.py
   cd backend
-  HOST=0.0.0.0 exec .venv/bin/python run.py
+  exec .venv/bin/python run.py
 fi
 
 (cd backend && exec .venv/bin/python run.py) &

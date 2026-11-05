@@ -1,9 +1,11 @@
 @echo off
 REM BookMind launcher (Windows): installs dependencies on first run, then starts backend + frontend.
-REM   start.bat lan   also lets phones on the same Wi-Fi open (and install) BookMind.
+REM   start.bat lan         also lets phones on the same Wi-Fi open (and install) BookMind.
+REM   start.bat lan https   ...and adds a secure https:// address (needed for the offline app).
 setlocal
 cd /d "%~dp0"
 set MODE=%~1
+set OPTION=%~2
 
 if not exist backend\.env (
   copy backend\.env.example backend\.env >nul
@@ -49,7 +51,8 @@ echo Building the app for phones...
 pushd frontend
 call npm run build || (popd & exit /b 1)
 popd
-backend\.venv\Scripts\python.exe backend\scripts\lan_info.py
 set HOST=0.0.0.0
+if /i "%OPTION%"=="https" set HTTPS=true
+backend\.venv\Scripts\python.exe backend\scripts\lan_info.py
 cd /d "%~dp0backend"
 .venv\Scripts\python.exe run.py

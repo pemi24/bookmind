@@ -106,6 +106,17 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # Optional HTTPS for phones (start.bat lan https / ./start.sh --lan --https): a second address,
+    # https://<this computer>:HTTPS_PORT, next to the plain http one on PORT. Phones need it for
+    # the offline app shell. BookMind makes its own certificate in HTTPS_DIR (see app/certs.py);
+    # each phone trusts it once. Or point SSL_CERTFILE/SSL_KEYFILE at your own (e.g. from mkcert)
+    # and SSL_CA_FILE at the CA phones should download.
+    https: bool = False
+    https_port: int = 8443
+    https_dir: Path = BACKEND_DIR / "data" / "https"
+    ssl_certfile: str = ""
+    ssl_keyfile: str = ""
+    ssl_ca_file: str = ""
 
     # --- Accounts ---
     # Sessions live in PostgreSQL; the browser only holds a random token in an HttpOnly cookie.

@@ -59,7 +59,7 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   you've got, with a "Start over" option. Jumping to a cited passage never moves your bookmark.
 * **Reading stats** — time read per day, streaks, books finished, quiz scores, flashcard progress.
 * **Install on your phone** — open BookMind from an iPhone or Android phone on the same Wi-Fi and
-  add it to the home screen (see §5).
+  add it to the home screen, optionally over HTTPS for offline use (see §5).
 * **Listen** — chat replies and the book itself read aloud by natural voices that run on your
   computer (Piper, free and offline), your device's own voices, or optional cloud voices. In the
   reader the sentence being read is highlighted and followed; skip by sentence, paragraph or
@@ -374,8 +374,43 @@ BookMind still runs on your computer; the phone just opens it over your home Wi-
 Notes: the first time, Windows asks whether Python may use the network — allow it for **private
 networks**. Anyone on the same Wi-Fi can open BookMind and create an account while LAN mode runs
 (they can't see your library, but they can use your AI quota), so only use it on a network you
-trust. After an update, refresh the page once on the phone to get the new version. Browsers only enable offline caching (the service worker) over HTTPS or on
-the computer itself; over plain `http://` the home-screen app works but needs the computer to be on.
+trust. After an update, refresh the page once on the phone to get the new version. Over plain
+`http://` the home-screen app works but needs the computer to be on: phones keep the offline app
+shell (the service worker) only on a secure (HTTPS) address, and are stricter about audio there too.
+For that, use HTTPS mode below.
+
+#### HTTPS mode (recommended for the installed app)
+
+Start with **`start.bat lan https`** (Windows) or **`./start.sh --lan --https`** (macOS/Linux), or set
+`HTTPS=true` in `backend/.env`. BookMind then also answers on **`https://<this computer>:8443`**
+(`HTTPS_PORT`); the `http://…:8000` address keeps working. There is no public domain for a real
+certificate, so the first start creates a small **local certificate authority** for this computer in
+`backend/data/https/` (`ca.key` never leaves the computer) and a server certificate for its network
+addresses. The server certificate is renewed automatically (new Wi-Fi address, or yearly) by the
+same authority, so each phone trusts it **once**:
+
+1. On the phone, open **`http://<this computer>:8000/bookmind-ca.crt`** — the startup message and
+   **Settings → Use on your phone → First time on this phone?** show the exact address and a QR code.
+   Before trusting it, you can compare its SHA-256 fingerprint with the one shown there.
+2. **iPhone / iPad**: Safari asks to download a configuration profile → **Allow**. Open
+   **Settings → Profile Downloaded → Install** (or Settings → General → VPN & Device Management →
+   *BookMind local CA* → Install). Then **Settings → General → About → Certificate Trust Settings**
+   and turn on full trust for **BookMind local CA**. (Use Safari; other browsers can't install profiles.)
+3. **Android**: the file is saved to Downloads. Open **Settings → Security (& privacy) → More security
+   settings → Encryption & credentials → Install a certificate → CA certificate** → *Install anyway* →
+   pick `BookMind-CA.crt` (search Settings for "CA certificate" if the menus differ). Chrome trusts
+   it; Firefox needs *Settings → About Firefox*, tap the logo 5×, then *Secret settings → Use third
+   party CA certificates*.
+4. Open **`https://<this computer>:8443`** — no warning now — sign in, and add it to the home screen
+   (if you installed the `http://` version before, remove that icon and install the https one).
+
+To remove it later: iPhone — Settings → General → VPN & Device Management → *BookMind local CA* →
+Remove; Android — Encryption & credentials → User credentials. To start over (new authority,
+phones must trust it again), stop BookMind and delete `backend/data/https/`. Prefer
+[mkcert](https://github.com/FiloSottile/mkcert)? Set `SSL_CERTFILE` / `SSL_KEYFILE` to its files and
+`SSL_CA_FILE` to its `rootCA.pem` (`mkcert -CAROOT`) so the download link serves that instead.
+Only trust a certificate you made yourself: whoever holds its `ca.key` could impersonate websites to
+that phone, so keep `backend/data/https/` private.
 
 ### Manual steps (what the scripts do)
 
@@ -470,6 +505,11 @@ the running backend (start it first); the test book is deleted afterwards.
 | "rate-limiting" / "overloaded" / "free daily quota is used up" | Cloud providers only. Add backups (`LLM_FALLBACKS=groq,openrouter`, §4) and BookMind switches automatically; without backups, Gemini falls back to `GEMINI_FALLBACK_MODEL`. Free daily quotas reset once a day. |
 | "Google's content filter stopped this answer" | Gemini's filter occasionally blocks harmless book passages, more often with the lighter fallback model. Rephrase, retry later (when the main model isn't overloaded), or use Ollama / Anthropic. |
 | Phone can't open the LAN address | Same Wi-Fi network (not guest Wi-Fi or mobile data)? Allow Python through the firewall for private networks (Windows Security → Firewall → Allow an app). Try the other addresses `start.bat lan` prints. If `backend/.env` sets `HOST`, remove that line. |
+| Phone shows "Not private" / "This connection is not private" on the https address | The phone doesn't trust BookMind's certificate yet: follow HTTPS mode steps 1–3 (§5). On iPhone, step 3 (Certificate Trust Settings) is easy to miss. If you deleted `backend/data/https/`, trust the new `bookmind-ca.crt` again. |
+| HTTPS worked, now the phone warns again | The computer probably got a new Wi-Fi address while BookMind was running. Restart BookMind: it re-issues the certificate for the new address with the same authority, so nothing needs re-trusting. (A DHCP reservation in your router keeps the address fixed.) |
+| `https://…:8443` doesn't load at all | Started with `start.bat lan https` (the startup message lists the https address)? Allow Python through the firewall (port 8443 too). If `backend/.env` sets `HTTPS=false`, remove that line. Change the port with `HTTPS_PORT`. |
+| Android: "Install a certificate" refuses the file / asks for a PIN | Android requires a screen lock to install CA certificates; set one. Install from Settings (not by tapping the download). |
+| Signed in on https, but the http:// address keeps asking to sign in (or the other way round) | Sign-in cookies over HTTPS are marked Secure and not sent over plain http. Stick to one address per phone — the https one once it's trusted. |
 | "Find free books" says a library is busy or slow | That site is temporarily overloaded; the other sources still answer. Try again in a minute (results are cached for an hour). |
 | A book I want isn't in "Find free books" | These libraries only carry books that are free to share — mostly books out of copyright (in the US, published before ~1930). Newer books must be uploaded from your own copy. |
 | Answers say "the book doesn't say" although it does | BookMind already searches a second time with other wordings. Rephrase with the names the book uses (e.g. "Abram" in Genesis), ask a narrower question, or open the reader's search. For whole-book questions, generating a whole-book summary (Summaries tab) gives the AI an overview to work from. |

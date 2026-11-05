@@ -23,7 +23,7 @@ from app.db.models import AppMeta, Book
 from app.db.session import SessionLocal
 from app.features.jobs import fail_interrupted_jobs
 from app.ingestion.parsers.pdf import tesseract_available
-from app import network
+from app import certs, network
 from app.llm.client import LLMError, provider, provider_status
 from app.llm.providers import ProviderStatus
 from app.retrieval.embeddings import get_embedder
@@ -183,18 +183,47 @@ async def network_info(request: Request):
     s = get_settings()
     lan = network.reachable_from_network(s.host)
     built = (_DIST / "index.html").is_file()
-    urls = [f"http://{ip}:{s.port}" for ip in network.lan_addresses()]
+    ips = network.lan_addresses()
+    urls = [f"http://{ip}:{s.port}" for ip in ips]
+    secure_urls = [f"https://{ip}:{s.https_port}" for ip in ips] if s.https else []
     # Already opened from another device? Then the address in use is the one to share.
     host = request.url.hostname or ""
     if lan and host and host not in ("localhost", "127.0.0.1", "::1"):
-        current = f"http://{host}:{request.url.port or s.port}"
+        current, secure = f"http://{host}:{s.port}", f"https://{host}:{s.https_port}"
         urls = [current, *[u for u in urls if u != current]]
+        if s.https:
+            secure_urls = [secure, *[u for u in secure_urls if u != secure]]
+    https = {"enabled": s.https, "port": s.https_port, "addresses": [], "ca_url": None, "ca_qr_svg": None,
+             "ca_fingerprint": None}
+    paths = certs.resolve(s, create=False) if s.https else None
+    if paths:
+        https["addresses"] = [{"url": u, "qr_svg": network.qr_svg(u)} for u in secure_urls[:3]]
+        if paths.cafile and paths.cafile.is_file() and urls:
+            # Over plain http, so the phone needn't click through a certificate warning to get it.
+            https["ca_url"] = f"{urls[0]}/bookmind-ca.crt"
+            https["ca_qr_svg"] = network.qr_svg(https["ca_url"])
+            https["ca_fingerprint"] = certs.ca_fingerprint(paths.cafile)
     return {
         "lan_mode": lan,
         "app_built": built,
         "port": s.port,
         "addresses": [{"url": u, "qr_svg": network.qr_svg(u)} for u in urls[:3]],
+        "https": https,
     }
+
+
+@app.get("/bookmind-ca.crt", include_in_schema=False)
+async def https_ca_certificate():
+    """The public certificate of BookMind's local CA, for phones to trust (HTTPS mode only).
+
+    Not secret, so no sign-in: the phone downloads it before it has ever opened BookMind."""
+    s = get_settings()
+    paths = certs.resolve(s, create=False) if s.https else None
+    if not paths or not paths.cafile or not paths.cafile.is_file():
+        return JSONResponse(status_code=404, content={"detail": "HTTPS mode is off."})
+    # This media type makes iOS offer to install it as a profile, and Android as a CA certificate.
+    return FileResponse(paths.cafile, media_type="application/x-x509-ca-cert", filename="BookMind-CA.crt",
+                        headers={"Cache-Control": "no-cache"})
 
 
 # ---------------------------------------------------------------- built web app (phone / LAN mode)

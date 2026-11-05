@@ -363,6 +363,16 @@ export interface NetworkInfo {
   app_built: boolean;
   port: number;
   addresses: { url: string; qr_svg: string }[];
+  /** Optional secure address (start.bat lan https / start.sh --lan --https). */
+  https: {
+    enabled: boolean;
+    port: number;
+    addresses: { url: string; qr_svg: string }[];
+    /** BookMind's local CA certificate, downloaded over plain http; each phone trusts it once. */
+    ca_url: string | null;
+    ca_qr_svg: string | null;
+    ca_fingerprint: string | null;
+  };
 }
 
 /** A Project Gutenberg search result. */
