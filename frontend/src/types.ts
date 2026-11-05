@@ -20,6 +20,7 @@ export interface Book {
   indexed_at: string | null;
   chapter_count: number | null;
   reading: Reading | null;
+  listening: Listening | null; // where read-aloud stopped
 }
 
 /** Where the reader stopped. Positions are chapter positions; furthest = furthest chapter actually read. */
@@ -27,6 +28,12 @@ export interface Reading {
   position: number;
   offset: number;
   furthest: number | null;
+  updated_at: string | null;
+}
+
+export interface Listening {
+  position: number; // chapter position
+  offset: number; // char offset of the sentence
   updated_at: string | null;
 }
 

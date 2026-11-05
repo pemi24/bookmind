@@ -38,7 +38,15 @@ def book_dict(b: Book, chapter_count: int | None = None) -> dict:
         "indexed_at": b.indexed_at.isoformat() if b.indexed_at else None,
         "chapter_count": chapter_count,
         "reading": reading_dict(b),
+        "listening": listening_dict(b),
     }
+
+
+def listening_dict(b: Book) -> dict | None:
+    if b.listen_position is None:
+        return None
+    return {"position": b.listen_position, "offset": b.listen_offset or 0,
+            "updated_at": b.listen_updated_at.isoformat() if b.listen_updated_at else None}
 
 
 def reading_dict(b: Book) -> dict | None:

@@ -27,6 +27,7 @@ import type {
   QuizResult,
   QuizSummary,
   Quote,
+  Listening,
   Reading,
   Relation,
   SearchHit,
@@ -224,7 +225,20 @@ export const tts = {
     fetchAudio("/api/tts/speak", { ...json("POST", body), signal }),
   preview: (voice: string, speed: number, signal?: AbortSignal) =>
     fetchAudio(`/api/tts/preview?${new URLSearchParams({ voice, speed: String(speed) })}`, { signal }),
+  /** A chapter as sentences, with offsets into its text and each one's paragraph start (`p`). */
+  chapterSentences: (chapterId: number) =>
+    request<{ chapter_id: number; position: number; title: string; sentences: ChapterSentence[] }>(`/api/tts/chapters/${chapterId}/sentences`),
+  saveListening: (bookId: number, position: number, offset: number) =>
+    request<Listening>(`/api/tts/books/${bookId}/listening`, json("PUT", { position, offset })),
+  clearListening: (bookId: number) => request<void>(`/api/tts/books/${bookId}/listening`, { method: "DELETE" }),
 };
+
+export interface ChapterSentence {
+  start: number;
+  end: number;
+  text: string;
+  p: number;
+}
 
 export const admin = {
   users: () => request<AdminUser[]>("/api/admin/users"),

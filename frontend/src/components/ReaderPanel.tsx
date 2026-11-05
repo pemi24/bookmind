@@ -2,7 +2,10 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Languages, Loader2, 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { ChapterInfo, ChapterText, HighlightColor, Note, Reading, SearchHit, TranslationState } from "../types";
+import { useBookPlayer } from "../audio/useBookPlayer";
 import { findLoose, loadPref, savePref } from "../utils";
+import { useWorkspace } from "../workspace";
+import ListenBar from "./ListenBar";
 import { buttonClasses } from "./ui";
 
 export interface ReaderTarget {
@@ -14,7 +17,7 @@ export interface ReaderTarget {
 interface Range {
   start: number;
   end: number;
-  kind: "cite" | "search" | "search-active" | "user";
+  kind: "cite" | "search" | "search-active" | "user" | "tts"; // tts: only where CSS highlights aren't supported
   color?: HighlightColor;
   noteId?: number;
   comment?: string | null;
@@ -82,7 +85,13 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
       const active = cover.find((r) => r.kind === "search-active");
       const search = cover.find((r) => r.kind === "search");
       const user = cover.filter((r) => r.kind === "user").pop(); // newest wins where highlights overlap
-      if (active || search) {
+      if (cover.some((r) => r.kind === "tts")) {
+        children.push(
+          <mark key={a} className="tts-hl" data-target="tts">
+            {seg}
+          </mark>,
+        );
+      } else if (active || search) {
         children.push(
           <mark key={a} className={active ? "search-hl search-active" : "search-hl"} data-target={active ? "search" : undefined}>
             {seg}
@@ -129,6 +138,40 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
     );
   });
   return out;
+}
+
+// The CSS Custom Highlight API paints the sentence being read without re-rendering the chapter.
+const CAN_HIGHLIGHT = typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
+
+/** A DOM range over chapter text [start, end) inside the paragraph starting at `p` (page markers skipped). */
+function textRange(root: HTMLElement, p: number, start: number, end: number): globalThis.Range | null {
+  const para = root.querySelector<HTMLElement>(`p[data-p="${p}"]`);
+  if (!para) return null;
+  const walker = document.createTreeWalker(para, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest("[data-page]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const range = document.createRange();
+  let pos = p;
+  let started = false;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const len = n.textContent?.length ?? 0;
+    if (!started && start < pos + len) {
+      range.setStart(n, Math.max(0, start - pos));
+      started = true;
+    }
+    if (started && end <= pos + len) {
+      range.setEnd(n, Math.max(0, end - pos));
+      return range;
+    }
+    pos += len;
+  }
+  if (!started) return null;
+  range.setEndAfter(para.lastChild ?? para);
+  return range;
+}
+
+function isShortcut(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): boolean {
+  return !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === " " || e.key === "ArrowLeft" || e.key === "ArrowRight");
 }
 
 function pageAt(pageMap: [number, number][], offset: number): number | null {
@@ -181,6 +224,18 @@ export default function ReaderPanel({
   const [langPicker, setLangPicker] = useState(false);
   const [translation, setTranslation] = useState<TranslationState | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { book, user, onUser } = useWorkspace();
+  const [follow, setFollow] = useState(() => loadPref("reader:tts-follow", true));
+  const lastManualScroll = useRef(0);
+
+  // Read aloud. Moving into the next chapter shows it here, without counting as reading progress.
+  const showChapter = useCallback((id: number) => {
+    byUser.current = false;
+    resumeRef.current = null;
+    setChapterId(id);
+  }, []);
+  const player = useBookPlayer({ bookId, bookTitle: book.title, chapters, user, saved: book.listening, onShowChapter: showChapter });
+  const reading = player.current; // the sentence being read aloud
 
   // Reading progress. Only the reader's own navigation and scrolling count: jumping to a cited
   // passage or a search hit must not move the bookmark or mark chapters as read.
@@ -314,14 +369,43 @@ export default function ReaderPanel({
         if (h.chapter_id === chapter.id) r.push({ start: h.start, end: h.end, kind: i === active ? "search-active" : "search" });
       });
     }
+    if (!CAN_HIGHLIGHT && reading && reading.chapterId === chapter.id) r.push({ start: reading.start, end: reading.end, kind: "tts" });
     return r;
-  }, [chapter, highlights, target, hits, active]);
+  }, [chapter, highlights, target, hits, active, reading]);
 
   const shownTranslation = translation?.status === "done" ? translation.paragraphs : undefined;
   const body = useMemo(
     () => (chapter ? renderChapter(chapter.text, ranges, chapter.page_map, shownTranslation) : null),
     [chapter, ranges, shownTranslation],
   );
+
+  // The sentence being read: highlighted, and kept in view while following along (but not right
+  // after the reader scrolled by hand: they're looking at something). Re-applied when the text
+  // re-renders (a new highlight, a translation), since that replaces the text nodes.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!CAN_HIGHLIGHT || !el) return;
+    if (!reading || !chapter || reading.chapterId !== chapter.id) {
+      CSS.highlights.delete("bookmind-tts");
+      return;
+    }
+    const range = textRange(el, reading.p, reading.start, reading.end);
+    if (range) CSS.highlights.set("bookmind-tts", new Highlight(range));
+    else CSS.highlights.delete("bookmind-tts");
+    if (follow && range && Date.now() - lastManualScroll.current > 8000) {
+      const r = range.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      if (r.top < box.top + 40 || r.bottom > box.bottom - 40) {
+        el.scrollTo({ top: el.scrollTop + r.top - box.top - el.clientHeight / 3, behavior: Math.abs(r.top - box.top) < 2000 ? "smooth" : "auto" });
+      }
+    }
+  }, [reading, chapter, body, follow]);
+  useEffect(() => () => void (CAN_HIGHLIGHT && CSS.highlights.delete("bookmind-tts")), []);
+  // Fallback highlight (a <mark>): follow it the same way.
+  useEffect(() => {
+    if (CAN_HIGHLIGHT || !follow || !reading || Date.now() - lastManualScroll.current < 8000) return;
+    scrollRef.current?.querySelector("mark[data-target='tts']")?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [reading, follow, body]);
 
   // Side-by-side translation: a saved one loads at once; otherwise it's translated in the background (polled).
   useEffect(() => {
@@ -408,10 +492,40 @@ export default function ReaderPanel({
     // Halfway through a chapter you've been reading counts as having read into it.
     if (userScrolled.current) report(f >= 0.5);
   };
+  const onTextKeyDown = (e: React.KeyboardEvent) => {
+    if (!(player.active && isShortcut(e))) markUserScroll(); // the read-aloud shortcuts don't scroll
+  };
   const markUserScroll = () => {
     userScrolled.current = true;
     byUser.current = true;
     lastActive.current = Date.now();
+    lastManualScroll.current = Date.now();
+  };
+
+  // Read-aloud shortcuts, anywhere except while typing.
+  const playerRef = useRef(player);
+  playerRef.current = player;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const p = playerRef.current;
+      if (!p.active || !isShortcut(e)) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable='true'], [role='menu']")) return;
+      if (e.key === " " && t?.closest("button, a")) return; // Space presses the focused button itself
+      e.preventDefault();
+      if (e.key === " ") p.toggle();
+      else if (e.shiftKey) p.paragraph(e.key === "ArrowRight" ? 1 : -1);
+      else p.sentence(e.key === "ArrowRight" ? 1 : -1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /** Read aloud from the sentence at (or after) an offset in the chapter on screen. */
+  const readHere = (offset: number) => {
+    if (!chapter) return;
+    lastManualScroll.current = 0; // follow from here
+    void player.readFrom(chapter.id, offset);
   };
 
   const runSearch = async () => {
@@ -743,8 +857,14 @@ export default function ReaderPanel({
           const t = e.target as HTMLElement;
           if (t.closest("[data-reader-ui]")) return;
           const mark = t.closest<HTMLElement>("mark[data-note]");
-          if (mark && window.getSelection()?.isCollapsed !== false) openHighlight(mark);
-          else setEditing(null);
+          const collapsed = window.getSelection()?.isCollapsed !== false;
+          if (mark && collapsed) openHighlight(mark);
+          else if (editing) setEditing(null);
+          else if (player.active && collapsed && !selection) {
+            // while listening, tapping a paragraph reads from there
+            const para = t.closest<HTMLElement>("p[data-p]");
+            if (para) readHere(Number(para.dataset.p));
+          }
         }}
         onMouseUp={onMouseUp}
         onTouchEnd={() => window.setTimeout(onMouseUp, 50)}
@@ -752,7 +872,7 @@ export default function ReaderPanel({
         onWheel={markUserScroll}
         onTouchMove={markUserScroll}
         onPointerDown={markUserScroll /* includes dragging the scrollbar */}
-        onKeyDown={markUserScroll}
+        onKeyDown={onTextKeyDown}
         tabIndex={-1}
         className="relative flex-1 overflow-y-auto px-5 py-4 font-serif outline-none sm:px-8"
         style={{ fontSize: FONT_SIZES[fontIdx], lineHeight: 1.75 }}
@@ -776,6 +896,19 @@ export default function ReaderPanel({
             <span className="h-4 w-px bg-white/30 dark:bg-stone-400" />
             <button onClick={() => saveSelection("yellow", true)} className="px-1 text-xs font-medium whitespace-nowrap text-white hover:underline dark:text-stone-900">
               ✎ Add note
+            </button>
+            <span className="h-4 w-px bg-white/30 dark:bg-stone-400" />
+            <button
+              onClick={() => {
+                const loc = chapter && findLoose(chapter.text, selection.text, selection.near);
+                window.getSelection()?.removeAllRanges();
+                setSelection(null);
+                readHere(loc ? loc[0] : selection.near);
+              }}
+              className="px-1 text-xs font-medium whitespace-nowrap text-white hover:underline dark:text-stone-900"
+              title="Read aloud from here"
+            >
+              ▶ Read from here
             </button>
           </div>
         )}
@@ -852,6 +985,21 @@ export default function ReaderPanel({
           )}
         </div>
       </div>
+
+      <ListenBar
+        player={player}
+        chapters={chapters}
+        shownChapter={chapters.find((c) => c.id === chapter?.id) ?? null}
+        hereOffset={topOffset}
+        follow={follow}
+        onFollow={(v) => {
+          setFollow(v);
+          savePref("reader:tts-follow", v);
+          if (v) lastManualScroll.current = 0;
+        }}
+        user={user}
+        onUser={onUser}
+      />
     </aside>
   );
 }

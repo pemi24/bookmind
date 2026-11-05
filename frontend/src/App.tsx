@@ -338,8 +338,8 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
   );
 
   const workspace = useMemo<Workspace | null>(
-    () => (book ? { book, books, chapters, maxChapter, openPassage, saveNote, notify, user } : null),
-    [book, books, chapters, maxChapter, openPassage, saveNote, notify, user],
+    () => (book ? { book, books, chapters, maxChapter, openPassage, saveNote, notify, user, onUser } : null),
+    [book, books, chapters, maxChapter, openPassage, saveNote, notify, user, onUser],
   );
 
   const closeReader = () => {

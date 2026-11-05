@@ -171,6 +171,14 @@ export class SpeechQueue {
     this.stop();
   }
 
+  /** What the lock screen shows, e.g. when reading moves into the next chapter. */
+  setMeta(meta: NonNullable<QueueOptions["meta"]>) {
+    this.opts.meta = meta;
+    if (this.release && "mediaSession" in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: meta.title, artist: meta.artist ?? "BookMind", album: meta.album ?? "" });
+    }
+  }
+
   /* ---------- the reading loop ---------- */
 
   private async loop(gen: number) {
@@ -186,6 +194,7 @@ export class SpeechQueue {
       }
       const i = this.index;
       this.opts.onSentence?.(i);
+      if (gen !== this.generation) return; // paused by onSentence (e.g. a sleep timer at a chapter's end)
       const ctrl = new AbortController();
       this.sentenceCtrl = ctrl;
       try {

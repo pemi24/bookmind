@@ -14,6 +14,8 @@ export interface Workspace {
   notify: (msg: string) => void;
   /** The signed-in user (their listening preferences, for one). */
   user: User;
+  /** After the account changed (e.g. a voice or speed picked in the reader's player). */
+  onUser: (u: User) => void;
 }
 
 export const WorkspaceContext = createContext<Workspace | null>(null);

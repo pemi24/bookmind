@@ -55,6 +55,19 @@ body {
   @apply font-semibold;
 }
 
+/* The sentence being read aloud. The CSS Custom Highlight API paints it without re-rendering the
+   chapter; mark.tts-hl is the fallback for browsers without it. */
+::highlight(bookmind-tts) {
+  background-color: rgb(167 243 208 / 0.75);
+  color: inherit;
+}
+.dark ::highlight(bookmind-tts) {
+  background-color: rgb(16 185 129 / 0.35);
+}
+mark.tts-hl {
+  @apply rounded-sm bg-emerald-200/75 text-inherit dark:bg-emerald-500/35;
+}
+
 /* Reader highlight */
 mark.cite-hl {
   @apply rounded-sm bg-amber-200/80 px-0.5 text-inherit dark:bg-amber-400/35 dark:text-amber-50;

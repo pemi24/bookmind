@@ -72,6 +72,18 @@ def test_sentences_cut_long_runs_and_skip_decorations():
     assert split_sentences("") == [] and split_sentences("   \n ") == []
 
 
+def test_sentences_of_a_very_long_chapter_are_fast():
+    # The reader asks for a whole chapter at once; splitting must stay linear in its length.
+    import time
+
+    chapter = ("Mr. Fox met Dr. Owl at 3.30 p.m. by the oak. They spoke of frost, of spring, of J. R. R. Tolkien. "
+               "Was it late? It was.\n\n") * 4000  # ~500,000 characters
+    started = time.perf_counter()
+    sentences = split_sentences(chapter)
+    assert len(sentences) == 4 * 4000
+    assert time.perf_counter() - started < 3
+
+
 def test_sentences_keep_line_wraps_inside_a_sentence():
     # PDFs wrap lines with single newlines; only blank lines are paragraph breaks
     text = "The frost came early\nthat year, and the fox\nwaited. Spring followed."
@@ -313,6 +325,66 @@ async def test_voice_preferences_are_saved_per_account(test_db):
         for bad in ({"tts_chat_voice": "skynet:hal"}, {"tts_read_voice": "piper"}, {"tts_speed": 3},
                     {"tts_volume": -1}, {"tts_chat_voice": "piper:a\nb"}):
             assert (await a.patch("/api/account/preferences", json=bad)).status_code == 422, bad
+
+
+CHAPTER = ("Mr. Fox woke early. The frost was thick!\n\n"
+           "He waited by the oak,\nwatching the snow. Was spring near?\n\n"
+           "* * *\n\n"
+           "It was.")
+
+
+async def _book_with_chapters(user_id: int) -> tuple[int, list[int]]:
+    from tests.test_account import _add_book
+    from app.db.models import Chapter
+    from app.db.session import SessionLocal
+
+    book_id = await _add_book(user_id, title="The Winter Fox")
+    async with SessionLocal() as db:
+        chapters = [Chapter(book_id=book_id, position=1, title="Frost", text=CHAPTER, page_map=[]),
+                    Chapter(book_id=book_id, position=2, title="Spring", text="Spring came.", page_map=[])]
+        db.add_all(chapters)
+        await db.commit()
+        return book_id, [c.id for c in chapters]
+
+
+@pytestmark_api
+async def test_chapter_sentences_with_offsets_and_paragraphs(test_db):
+    async with signed_in(_app()) as a:
+        _, (ch1, _) = await _book_with_chapters(a.user["id"])
+        r = await a.get(f"/api/tts/chapters/{ch1}/sentences")
+        assert r.status_code == 200
+        body = r.json()
+        assert (body["position"], body["title"]) == (1, "Frost")
+        got = body["sentences"]
+        assert [s["text"] for s in got] == [
+            "Mr. Fox woke early.", "The frost was thick!", "He waited by the oak, watching the snow.",
+            "Was spring near?", "It was."]
+        paragraph_starts = [0, CHAPTER.index("He waited"), CHAPTER.index("It was.")]
+        assert [s["p"] for s in got] == [paragraph_starts[i] for i in (0, 0, 1, 1, 2)]
+        for s in got:
+            assert " ".join(CHAPTER[s["start"]:s["end"]].split()) == s["text"]
+
+
+@pytestmark_api
+async def test_listening_position_is_saved_and_private(test_db):
+    async with signed_in(_app()) as a, signed_in(_app()) as b:
+        book_id, (ch1, ch2) = await _book_with_chapters(a.user["id"])
+        assert (await a.get(f"/api/books/{book_id}")).json()["listening"] is None
+        r = await a.put(f"/api/tts/books/{book_id}/listening", json={"position": 2, "offset": 7})
+        assert r.status_code == 200 and (r.json()["position"], r.json()["offset"]) == (2, 7)
+        assert (await a.get(f"/api/books/{book_id}")).json()["listening"]["position"] == 2
+        # the reading bookmark is separate
+        assert (await a.get(f"/api/books/{book_id}")).json()["reading"] is None
+        assert (await a.put(f"/api/tts/books/{book_id}/listening", json={"position": 9})).status_code == 400
+
+        # someone else: 404 for the book, its chapters' text and its position
+        assert (await b.get(f"/api/tts/chapters/{ch1}/sentences")).status_code == 404
+        assert (await b.put(f"/api/tts/books/{book_id}/listening", json={"position": 1})).status_code == 404
+        assert (await b.delete(f"/api/tts/books/{book_id}/listening")).status_code == 404
+        assert (await a.get(f"/api/books/{book_id}")).json()["listening"]["position"] == 2
+
+        assert (await a.delete(f"/api/tts/books/{book_id}/listening")).status_code == 204
+        assert (await a.get(f"/api/books/{book_id}")).json()["listening"] is None
 
 
 # ---------- real Piper (opt-in) ----------

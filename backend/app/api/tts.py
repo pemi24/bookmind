@@ -6,15 +6,21 @@ voices never come here; they're played by the browser itself.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import ratelimit
+from app.api.books import listening_dict
+from app.auth import ratelimit, scope
 from app.auth.deps import CurrentUser, current_user
 from app.config import get_settings
+from app.db.models import Chapter
+from app.db.session import get_db
 from app.tts import get_registry
 from app.tts.base import TTSError
 from app.tts.text import clean_for_speech, split_sentences
@@ -86,6 +92,47 @@ async def speak(user: CurrentUser, req: SpeakRequest):
         return _audio(await get_registry().speak(req.text, req.voice, req.speed, req.volume))
     except TTSError as e:
         return _no_voice(e)
+
+
+@router.get("/chapters/{chapter_id}/sentences")
+async def chapter_sentences(user: CurrentUser, chapter_id: int, db: AsyncSession = Depends(get_db)):
+    """A chapter as sentences for reading aloud. Offsets point into the chapter's text (the reader
+    highlights with them); `p` is the start of the sentence's paragraph (text split on blank lines)."""
+    ch = await scope.chapter(db, chapter_id, user)  # 404 for someone else's book
+    text = ch.text or ""
+    paragraphs, at = [], 0
+    for para in text.split("\n\n"):
+        paragraphs.append(at)
+        at += len(para) + 2
+    out = []
+    for s in split_sentences(text):
+        out.append({"start": s.start, "end": s.end, "text": s.text, "p": paragraphs[bisect_right(paragraphs, s.start) - 1]})
+    return {"chapter_id": ch.id, "position": ch.position, "title": ch.title, "sentences": out}
+
+
+class ListeningUpdate(BaseModel):
+    position: int = Field(ge=1)  # chapter position (survives re-indexing; chapter ids don't)
+    offset: int = Field(default=0, ge=0)  # char offset of the sentence being read
+
+
+@router.put("/books/{book_id}/listening")
+async def save_listening(user: CurrentUser, book_id: int, req: ListeningUpdate, db: AsyncSession = Depends(get_db)):
+    """Remember where read-aloud is, for "Continue listening"."""
+    book = await scope.book(db, book_id, user)
+    exists = await db.scalar(select(Chapter.id).where(Chapter.book_id == book.id, Chapter.position == req.position))
+    if exists is None:
+        raise HTTPException(400, "This book has no such chapter.")
+    book.listen_position, book.listen_offset, book.listen_updated_at = req.position, req.offset, func.now()
+    await db.commit()
+    await db.refresh(book)
+    return listening_dict(book)
+
+
+@router.delete("/books/{book_id}/listening", status_code=204)
+async def clear_listening(user: CurrentUser, book_id: int, db: AsyncSession = Depends(get_db)):
+    book = await scope.book(db, book_id, user)
+    book.listen_position = book.listen_offset = book.listen_updated_at = None
+    await db.commit()
 
 
 @router.get("/preview")

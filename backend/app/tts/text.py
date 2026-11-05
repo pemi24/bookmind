@@ -73,7 +73,8 @@ _NEXT_START = re.compile(r"\s*['\"“‘(\[]?[\w¿¡]")
 
 
 def _is_abbreviation(text: str, dot: int) -> bool:
-    m = _WORD_BEFORE.search(text, 0, dot)
+    # only the word just before the dot: searching from the text's start made long chapters slow
+    m = _WORD_BEFORE.search(text, max(0, dot - 40), dot)
     if not m:
         return False
     word = m.group(1).lower().rstrip(".")

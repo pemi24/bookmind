@@ -131,6 +131,10 @@ class Book(Base):
     reading_offset: Mapped[int | None] = mapped_column(Integer)  # char offset of the paragraph at the top
     furthest_position: Mapped[int | None] = mapped_column(Integer)  # furthest chapter actually read
     reading_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Where read-aloud stopped ("Continue listening"); separate from the reading position.
+    listen_position: Mapped[int | None] = mapped_column(Integer)  # chapter position
+    listen_offset: Mapped[int | None] = mapped_column(Integer)  # char offset of the sentence
+    listen_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     chapters: Mapped[list[Chapter]] = relationship(
         back_populates="book", order_by="Chapter.position", passive_deletes=True
