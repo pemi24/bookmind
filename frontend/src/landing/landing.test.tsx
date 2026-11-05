@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publicRouteFromHash } from "../Root";
+import AuthShowcase from "./AuthShowcase";
 import * as content from "./content";
 import Landing from "./Landing";
 import { Accordion } from "./ui/kit";
@@ -207,5 +208,49 @@ describe("routing for signed-out visitors", () => {
     expect(publicRouteFromHash("#/verify?token=abc")).toBe("auth");
     expect(publicRouteFromHash("#/privacy")).toBe("privacy");
     expect(publicRouteFromHash("#/terms")).toBe("terms");
+  });
+});
+
+describe("sign-in slideshow", () => {
+  const current = () => screen.getAllByRole("group").find((g) => g.getAttribute("aria-hidden") === "false")!;
+  const slides = content.authShowcase.slides;
+
+  it("advances on its own, and the pause button stops it", () => {
+    vi.useFakeTimers();
+    try {
+      mockMotion(false);
+      render(<AuthShowcase />);
+      expect(current().getAttribute("aria-label")).toContain(slides[0].title);
+      act(() => void vi.advanceTimersByTime(content.authShowcase.intervalMs));
+      expect(current().getAttribute("aria-label")).toContain(slides[1].title);
+      fireEvent.click(screen.getByRole("button", { name: /pause slideshow/i }));
+      act(() => void vi.advanceTimersByTime(content.authShowcase.intervalMs * 3));
+      expect(current().getAttribute("aria-label")).toContain(slides[1].title);
+      expect(screen.getByRole("button", { name: /play slideshow/i })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never moves by itself with reduced motion, but the controls still work", () => {
+    vi.useFakeTimers();
+    try {
+      mockMotion(true);
+      render(<AuthShowcase />);
+      act(() => void vi.advanceTimersByTime(content.authShowcase.intervalMs * 3));
+      expect(current().getAttribute("aria-label")).toContain(slides[0].title);
+      expect(screen.queryByRole("button", { name: /pause slideshow/i })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Next slide" }));
+      expect(current().getAttribute("aria-label")).toContain(slides[1].title);
+      fireEvent.click(screen.getByRole("button", { name: "Previous slide" }));
+      fireEvent.click(screen.getByRole("button", { name: "Previous slide" }));
+      expect(current().getAttribute("aria-label")).toContain(slides.at(-1)!.title); // wraps around
+      const dot = screen.getByRole("button", { name: new RegExp(`Show slide 3`) });
+      fireEvent.click(dot);
+      expect(dot.getAttribute("aria-current")).toBe("true");
+      expect(current().getAttribute("aria-label")).toContain(slides[2].title);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

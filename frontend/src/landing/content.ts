@@ -474,6 +474,21 @@ export const footer = {
   copyright: `© ${new Date().getFullYear()} BookMind`,
 };
 
+/* ---------- slideshow beside the sign-in / sign-up forms ---------- */
+
+export const authShowcase = {
+  label: "What you can do with BookMind",
+  intervalMs: 6000, // time per slide (it pauses on hover, on focus, and with reduced motion)
+  slides: [
+    { mockup: "chat" as const, title: "Ask anything, get cited answers", text: "Every answer comes from the book, with citations that open the exact passage." },
+    { mockup: "listen" as const, title: "Listen to it read aloud", text: "Natural voices, each sentence highlighted as it's read. Pick up where you stopped." },
+    { mockup: "summary" as const, title: "Summaries at the length you want", text: "Short, medium or detailed, for one chapter or the whole book." },
+    { mockup: "flashcards" as const, title: "Study with quizzes and flashcards", text: "Generated from the text, with spaced repetition to make it stick." },
+    { mockup: "explorer" as const, title: "See who's who", text: "Characters, places and ideas, mapped and linked to every mention." },
+    { mockup: "spoiler" as const, title: "No spoilers", text: "Tell BookMind how far you've read, and it stays behind that line." },
+  ] as { mockup: MockupName | "chat"; title: string; text: string }[],
+};
+
 /* ---------- legal pages (placeholders) ---------- */
 
 export const legal = {

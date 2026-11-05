@@ -35,6 +35,8 @@
   --color-accent-ink: #1f5c46; /* links / accent text on paper */
   --color-accent-soft: #e3efe8; /* tinted backgrounds */
   --color-highlight: #f6e7b5; /* "marker" highlight in mockups */
+  --color-panel: #1f5c46; /* the deep-green panel beside the sign-in forms */
+  --color-on-panel: #faf7f0;
 
   --radius-card: 1.25rem;
   --shadow-card: 0 1px 2px rgb(31 29 26 / 0.04), 0 8px 24px -12px rgb(31 29 26 / 0.12);
@@ -54,6 +56,8 @@
   --color-accent-ink: #7fcaa8;
   --color-accent-soft: #1c2c25;
   --color-highlight: #4a3f1c;
+  --color-panel: #17352a;
+  --color-on-panel: #ede8dd;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
   --shadow-float: 0 2px 4px rgb(0 0 0 / 0.3), 0 24px 48px -20px rgb(0 0 0 / 0.7);
 }

@@ -1,6 +1,8 @@
-import { BookOpen, CheckCircle2, Loader2, Lock, MessageSquareQuote, Quote, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { auth } from "../api";
+import AuthShowcase from "../landing/AuthShowcase";
+import Logo from "../landing/brand/Logo";
 import type { User } from "../types";
 
 /* ---------- #/  ·  #/signup  ·  #/forgot  ·  #/reset?token=  ·  #/verify?token= ---------- */
@@ -13,16 +15,16 @@ export function authViewFromHash(hash = window.location.hash): { view: AuthView;
 }
 
 const input =
-  "w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-stone-700 dark:bg-stone-900";
+  "w-full rounded-xl border border-line bg-paper px-3.5 py-2.5 text-[0.95rem] text-ink outline-none transition placeholder:text-ink-muted focus:border-accent focus:ring-2 focus:ring-accent/25";
 const primary =
-  "flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-700 disabled:opacity-60";
+  "flex w-full items-center justify-center gap-2 rounded-full bg-accent px-4 py-3 text-[0.95rem] font-medium text-on-accent shadow-card transition hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60";
 
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">{label}</span>
+      <span className="mb-1 block text-sm font-medium text-ink">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-xs text-stone-500">{hint}</span>}
+      {hint && <span className="mt-1 block text-xs text-ink-muted">{hint}</span>}
     </label>
   );
 }
@@ -32,7 +34,7 @@ function Alert({ kind, children }: { kind: "error" | "ok"; children: ReactNode }
     <div
       role={kind === "error" ? "alert" : "status"}
       className={`rounded-lg px-3 py-2 text-sm ${
-        kind === "error" ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200"
+        kind === "error" ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-accent-soft text-accent-ink"
       }`}
     >
       {children}
@@ -65,29 +67,36 @@ function SignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
   const f = useForm();
   return (
     <form onSubmit={f.run(async () => onSignedIn((await auth.login(email, password, remember)).user))} className="space-y-4">
-      <h2 className="text-xl font-semibold">Welcome back</h2>
+      <h2 className="font-display text-[1.85rem] leading-tight font-medium tracking-tight text-ink">Welcome back</h2>
       {f.error && <Alert kind="error">{f.error}</Alert>}
       <Field label="Email">
         <input type="email" required autoComplete="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className={input} />
       </Field>
       <Field label="Password">
-        <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
+        <input
+          type="password"
+          required
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className={input}
+        />
       </Field>
       <div className="flex items-center justify-between text-sm">
-        <label className="flex items-center gap-2 text-stone-600 dark:text-stone-400">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-brand-600" />
+        <label className="flex items-center gap-2 text-ink-muted">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-accent" />
           Keep me signed in
         </label>
-        <a href="#/forgot" className="text-brand-600 hover:underline dark:text-brand-400">
+        <a href="#/forgot" className="text-accent-ink hover:underline">
           Forgot password?
         </a>
       </div>
       <button disabled={f.busy} className={primary}>
         {f.busy && <Loader2 size={16} className="animate-spin" />} Sign in
       </button>
-      <p className="text-center text-sm text-stone-500">
+      <p className="text-center text-sm text-ink-muted">
         New to BookMind?{" "}
-        <a href="#/signup" className="font-medium text-brand-600 hover:underline dark:text-brand-400">
+        <a href="#/signup" className="font-medium text-accent-ink hover:underline">
           Create an account
         </a>
       </p>
@@ -114,7 +123,7 @@ function SignUp({ onSignedIn, minLength }: { onSignedIn: (u: User) => void; minL
       })}
       className="space-y-4"
     >
-      <h2 className="text-xl font-semibold">Create your library</h2>
+      <h2 className="font-display text-[1.85rem] leading-tight font-medium tracking-tight text-ink">Create your library</h2>
       {f.error && <Alert kind="error">{f.error}</Alert>}
       <Field label="Name">
         <input required maxLength={100} autoComplete="name" autoFocus value={name} onChange={(e) => setName(e.target.value)} className={input} />
@@ -123,7 +132,15 @@ function SignUp({ onSignedIn, minLength }: { onSignedIn: (u: User) => void; minL
         <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={input} />
       </Field>
       <Field label="Password" hint={`At least ${minLength} characters. A short phrase is easy to remember and hard to guess.`}>
-        <input type="password" required minLength={minLength} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
+        <input
+          type="password"
+          required
+          minLength={minLength}
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className={input}
+        />
       </Field>
       <Field label="Confirm password">
         <input type="password" required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
@@ -131,9 +148,9 @@ function SignUp({ onSignedIn, minLength }: { onSignedIn: (u: User) => void; minL
       <button disabled={f.busy} className={primary}>
         {f.busy && <Loader2 size={16} className="animate-spin" />} Create account
       </button>
-      <p className="text-center text-sm text-stone-500">
+      <p className="text-center text-sm text-ink-muted">
         Already have an account?{" "}
-        <a href="#/login" className="font-medium text-brand-600 hover:underline dark:text-brand-400">
+        <a href="#/login" className="font-medium text-accent-ink hover:underline">
           Sign in
         </a>
       </p>
@@ -146,18 +163,18 @@ function CheckEmail({ email }: { email: string }) {
   const f = useForm();
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Check your email</h2>
-      <p className="text-sm text-stone-600 dark:text-stone-400">
+      <h2 className="font-display text-[1.85rem] leading-tight font-medium tracking-tight text-ink">Check your email</h2>
+      <p className="text-sm text-ink-muted">
         We sent a link to <strong>{email}</strong>. Open it to confirm your address, then sign in.
       </p>
       {f.error && <Alert kind="error">{f.error}</Alert>}
       {sent && <Alert kind="ok">Sent again. It can take a minute to arrive.</Alert>}
       <form onSubmit={f.run(async () => (await auth.resendVerification(email), setSent(true)))}>
-        <button disabled={f.busy} className="text-sm text-brand-600 hover:underline disabled:opacity-60 dark:text-brand-400">
+        <button disabled={f.busy} className="text-sm text-accent-ink hover:underline disabled:opacity-60">
           Didn't get it? Send it again
         </button>
       </form>
-      <a href="#/login" className="block text-sm text-stone-500 hover:underline">
+      <a href="#/login" className="block text-sm text-ink-muted hover:underline">
         Back to sign in
       </a>
     </div>
@@ -170,8 +187,8 @@ function Forgot() {
   const f = useForm();
   return (
     <form onSubmit={f.run(async () => setDone((await auth.forgot(email)).message))} className="space-y-4">
-      <h2 className="text-xl font-semibold">Reset your password</h2>
-      <p className="text-sm text-stone-600 dark:text-stone-400">Enter your account's email and we'll send you a link to choose a new password.</p>
+      <h2 className="font-display text-[1.85rem] leading-tight font-medium tracking-tight text-ink">Reset your password</h2>
+      <p className="text-sm text-ink-muted">Enter your account's email and we'll send you a link to choose a new password.</p>
       {f.error && <Alert kind="error">{f.error}</Alert>}
       {done ? (
         <Alert kind="ok">{done}</Alert>
@@ -185,7 +202,7 @@ function Forgot() {
           </button>
         </>
       )}
-      <a href="#/login" className="block text-center text-sm text-stone-500 hover:underline">
+      <a href="#/login" className="block text-center text-sm text-ink-muted hover:underline">
         Back to sign in
       </a>
     </form>
@@ -215,11 +232,20 @@ function Reset({ token, minLength }: { token: string; minLength: number }) {
       })}
       className="space-y-4"
     >
-      <h2 className="text-xl font-semibold">Choose a new password</h2>
+      <h2 className="font-display text-[1.85rem] leading-tight font-medium tracking-tight text-ink">Choose a new password</h2>
       {!token && <Alert kind="error">This link is incomplete. Open the link from your email again, or ask for a new one.</Alert>}
       {f.error && <Alert kind="error">{f.error}</Alert>}
       <Field label="New password" hint={`At least ${minLength} characters.`}>
-        <input type="password" required minLength={minLength} autoComplete="new-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} className={input} />
+        <input
+          type="password"
+          required
+          minLength={minLength}
+          autoComplete="new-password"
+          autoFocus
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className={input}
+        />
       </Field>
       <Field label="Confirm new password">
         <input type="password" required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
@@ -227,7 +253,7 @@ function Reset({ token, minLength }: { token: string; minLength: number }) {
       <button disabled={f.busy || !token} className={primary}>
         {f.busy && <Loader2 size={16} className="animate-spin" />} Change password
       </button>
-      <a href="#/forgot" className="block text-center text-sm text-stone-500 hover:underline">
+      <a href="#/forgot" className="block text-center text-sm text-ink-muted hover:underline">
         Need a new link?
       </a>
     </form>
@@ -246,11 +272,11 @@ export function VerifyEmail({ token, onDone }: { token: string; onDone: () => vo
   return (
     <div className="space-y-4 text-center">
       {state === "working" ? (
-        <Loader2 className="mx-auto animate-spin text-brand-500" />
+        <Loader2 className="mx-auto animate-spin text-accent-ink" />
       ) : state === "ok" ? (
         <>
-          <CheckCircle2 className="mx-auto text-emerald-500" size={36} />
-          <h2 className="text-xl font-semibold">Email confirmed</h2>
+          <CheckCircle2 className="mx-auto text-accent-ink" size={36} />
+          <h2 className="font-display text-[1.85rem] leading-tight font-medium tracking-tight text-ink">Email confirmed</h2>
           <button onClick={onDone} className={primary}>
             Continue
           </button>
@@ -258,7 +284,7 @@ export function VerifyEmail({ token, onDone }: { token: string; onDone: () => vo
       ) : (
         <>
           <Alert kind="error">{state}</Alert>
-          <button onClick={onDone} className="text-sm text-brand-600 hover:underline">
+          <button onClick={onDone} className="text-sm text-accent-ink hover:underline">
             Continue
           </button>
         </>
@@ -267,20 +293,18 @@ export function VerifyEmail({ token, onDone }: { token: string; onDone: () => vo
   );
 }
 
-const FEATURES = [
-  { icon: MessageSquareQuote, title: "Answers from the book itself", text: "Every answer is drawn from the text, with citations you can open in the reader." },
-  { icon: Quote, title: "Study, quotes and essays", text: "Summaries, quizzes, flashcards, timelines and verified quotes for your essays." },
-  { icon: Lock, title: "Your library is private", text: "Your books, chats and notes are visible only to you." },
-];
-
-/** The signed-out app: a short introduction beside the sign-in / sign-up / reset forms. */
+/** Sign in, sign up and password resets, beside a slideshow of what BookMind does (wide screens).
+ * Same palette and type as the landing page (theme tokens in index.css). */
 export default function AuthScreen({ onSignedIn }: { onSignedIn: (u: User) => void }) {
   const [{ view, token }, setView] = useState(authViewFromHash);
   const [minLength, setMinLength] = useState(10);
   useEffect(() => {
     const on = () => setView(authViewFromHash());
     window.addEventListener("hashchange", on);
-    auth.config().then((c) => setMinLength(c.password_min_length)).catch(() => {});
+    auth
+      .config()
+      .then((c) => setMinLength(c.password_min_length))
+      .catch(() => {});
     return () => window.removeEventListener("hashchange", on);
   }, []);
 
@@ -300,38 +324,50 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: (u: User) => vo
   })();
 
   return (
-    <div className="flex min-h-full flex-col bg-stone-50 lg:flex-row dark:bg-stone-950">
-      <section className="flex flex-col justify-center bg-gradient-to-br from-brand-700 to-brand-900 px-6 py-6 text-white sm:px-12 sm:py-10 lg:w-1/2 lg:py-16">
-        <div className="mx-auto w-full max-w-lg">
-          <a href="#/" className="flex w-fit items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-white" title="BookMind home">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15">
-              <BookOpen size={20} />
-            </span>
-            <span className="text-xl font-semibold tracking-tight">BookMind</span>
+    <div className="landing flex min-h-full flex-col lg:flex-row">
+      {/* wide screens: a deep-green panel with a slideshow of features */}
+      <aside className="relative hidden flex-col overflow-hidden bg-panel px-12 py-10 text-on-panel lg:flex lg:w-[52%] xl:px-16">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-40 -right-40 h-[36rem] w-[36rem] bg-[radial-gradient(closest-side,rgb(255_255_255/0.09),transparent)]"
+        />
+        <a
+          href="#/"
+          className="relative w-fit rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-on-panel"
+          aria-label="BookMind home"
+        >
+          <Logo onPanel />
+        </a>
+        <div className="relative flex flex-1 items-center py-10">
+          <AuthShowcase />
+        </div>
+      </aside>
+
+      <main className="flex flex-1 flex-col px-5 py-6 sm:px-10 sm:py-10">
+        <div className="flex items-center justify-between">
+          <a
+            href="#/"
+            className="rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent lg:hidden"
+            aria-label="BookMind home"
+          >
+            <Logo />
           </a>
-          <h1 className="mt-4 font-serif text-2xl leading-tight sm:mt-8 sm:text-4xl">Talk with your books.</h1>
-          <p className="mt-2 text-sm text-brand-100 sm:mt-3 sm:text-base">Upload a PDF, EPUB or document, or pick a free classic, and ask it anything.</p>
-          <ul className="mt-8 hidden space-y-5 sm:block">
-            {FEATURES.map((f) => (
-              <li key={f.title} className="flex gap-3">
-                <f.icon size={20} className="mt-0.5 shrink-0 text-brand-200" />
-                <div>
-                  <p className="font-medium">{f.title}</p>
-                  <p className="text-sm text-brand-100/90">{f.text}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <a
+            href="#/"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm text-ink-muted transition hover:bg-paper-sunk hover:text-ink"
+          >
+            <ArrowLeft size={15} aria-hidden="true" /> Home
+          </a>
         </div>
-      </section>
-      <section className="flex flex-1 items-start justify-center px-4 py-6 sm:items-center sm:py-10">
-        <div className="w-full max-w-sm rounded-2xl border border-stone-200 bg-white p-6 shadow-sm sm:p-8 dark:border-stone-800 dark:bg-stone-900">
-          {form}
-          <p className="mt-6 flex items-center justify-center gap-1.5 text-xs text-stone-400">
-            <ShieldCheck size={13} /> Each account has its own private library.
-          </p>
+        <div className="flex flex-1 items-start justify-center pt-8 sm:items-center sm:pt-0">
+          <div className="w-full max-w-md rounded-[var(--radius-card)] border border-line bg-paper-raised p-6 shadow-card sm:p-9">
+            {form}
+            <p className="mt-7 flex items-center justify-center gap-1.5 text-xs text-ink-muted">
+              <ShieldCheck size={13} aria-hidden="true" /> Each account has its own private library.
+            </p>
+          </div>
         </div>
-      </section>
+      </main>
     </div>
   );
 }
