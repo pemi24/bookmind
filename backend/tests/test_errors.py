@@ -93,8 +93,13 @@ async def test_llm_unreachable_gives_clear_chat_error_and_health_status(client, 
     book = await _upload(client, "lh.txt", BOOK.format(c1=C1, c2=C2, c3=C3).encode(), "text/plain")
     assert (await _wait_ready(client, book["id"]))["status"] == "ready"
 
-    # Point the provider at a port where nothing listens.
-    dead = OllamaProvider(get_settings().model_copy(update={"ollama_host": "http://127.0.0.1:9"}))
+    # A provider whose connections are refused. Refused at once rather than by a real closed port:
+    # on Windows each refused connection to a local port takes ~2 s, and a chat makes several.
+    def refuse(request: httpx.Request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    dead = OllamaProvider(get_settings().model_copy(update={"ollama_host": "http://127.0.0.1:9"}),
+                          transport=httpx.MockTransport(refuse))
     monkeypatch.setattr(llm, "current_provider", lambda: dead)
     monkeypatch.setattr(main, "_llm_cache", {"at": 0.0, "status": None})
 

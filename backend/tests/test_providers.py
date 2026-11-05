@@ -153,6 +153,51 @@ async def test_ollama_not_running_message():
     assert not status.ok and "ollama.com/download" in status.message
 
 
+async def test_ollama_fails_fast_after_a_refused_connection(monkeypatch):
+    # One answer makes several model calls; after a refused connection the next ones fail at once
+    # (each refused connection takes ~2 s on Windows) until the window ends or Ollama answers again.
+    from app.llm.providers import ollama as ollama_mod
+
+    now = [1000.0]
+    monkeypatch.setattr(ollama_mod.time, "monotonic", lambda: now[0])
+    up = [False]
+    tried = []
+
+    def handler(request: httpx.Request):
+        tried.append(request.url.path)
+        if not up[0]:
+            raise httpx.ConnectError("refused", request=request)
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "qwen2.5:3b"}]})
+        return httpx.Response(200, json={"message": {"content": '{"answer": "ok"}'}})
+
+    class Out(BaseModel):
+        answer: str
+
+    p = ollama(handler)
+
+    async def chat():
+        return [c async for c in p.stream_chat("s", [{"role": "user", "content": "q"}])]
+
+    with pytest.raises(LLMError):
+        await chat()
+    for call in (chat, lambda: p.generate_json("s", "u", Out)):
+        with pytest.raises(LLMError) as e:
+            await call()
+        assert "Ollama isn't running" in e.value.message
+    assert tried == ["/api/chat"]  # only the first call reached the network
+
+    now[0] += 11  # the window is over: it tries again
+    with pytest.raises(LLMError):
+        await chat()
+    assert len(tried) == 2
+
+    # Ollama is started again; the health check notices at once and calls go through
+    up[0] = True
+    assert (await p.check()).ok
+    assert (await p.generate_json("s", "u", Out)).answer == "ok"
+
+
 async def test_ollama_model_not_pulled():
     def handler(request: httpx.Request):
         if request.url.path == "/api/tags":
