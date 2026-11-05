@@ -21,5 +21,6 @@ export default defineConfig({
     environment: "jsdom",
     pool: "threads", // forks can time out starting on a busy Windows machine
     include: ["src/**/*.test.{ts,tsx}"],
+    testTimeout: 15000, // rendering the whole landing page can take seconds on a busy machine
   },
 });

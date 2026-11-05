@@ -1,5 +1,21 @@
-import { AlertTriangle, BarChart3, BookOpen, ChevronUp, Compass, Library as LibraryIcon, Loader2, LogOut, MonitorSmartphone, Moon, Settings, ShieldCheck, Sun, Upload, X } from "lucide-react";
+import {
+  AlertTriangle,
+  BarChart3,
+  ChevronUp,
+  Compass,
+  Library as LibraryIcon,
+  Loader2,
+  LogOut,
+  MonitorSmartphone,
+  Moon,
+  Settings,
+  ShieldCheck,
+  Sun,
+  Upload,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import Logo from "../landing/brand/Logo";
 import type { Book, User } from "../types";
 import { isIndexing } from "../utils";
 
@@ -43,11 +59,8 @@ export default function Sidebar({
   return (
     <nav className="flex h-full flex-col border-r border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
       <div className="flex items-center gap-2 px-4 py-3">
-        <button onClick={() => onNavigate("#/")} className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white">
-            <BookOpen size={18} />
-          </span>
-          <span className="text-lg font-semibold tracking-tight">BookMind</span>
+        <button onClick={() => onNavigate("#/")} className="flex items-center rounded-lg" aria-label="BookMind, your library">
+          <Logo size={26} />
         </button>
         <button
           onClick={onToggleTheme}
@@ -150,7 +163,10 @@ function UserMenu({ user, onSignOut, onNavigate }: { user: User; onSignOut: (eve
   return (
     <div ref={ref} className="relative">
       {open && (
-        <div role="menu" className="absolute right-0 bottom-full left-0 mb-1 rounded-lg border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-700 dark:bg-stone-900">
+        <div
+          role="menu"
+          className="absolute right-0 bottom-full left-0 mb-1 rounded-lg border border-stone-200 bg-white p-1 shadow-lg dark:border-stone-700 dark:bg-stone-900"
+        >
           <div className="px-3 py-2 text-xs text-stone-500">
             Signed in as
             <div className="truncate text-sm font-medium text-stone-800 dark:text-stone-100">{user.email}</div>
@@ -182,7 +198,9 @@ function UserMenu({ user, onSignOut, onNavigate }: { user: User; onSignOut: (eve
         aria-expanded={open}
         className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-stone-100 dark:hover:bg-stone-800"
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">{initials(user)}</span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600 text-xs font-semibold text-white">
+          {initials(user)}
+        </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium">{user.display_name || user.email.split("@")[0]}</span>
           <span className="block truncate text-xs text-stone-500">{user.email}</span>

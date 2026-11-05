@@ -1,8 +1,9 @@
-import { BookOpen, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { ApiError, auth, setSignedOutHandler } from "./api";
 import AuthScreen, { authViewFromHash, VerifyEmail } from "./components/AuthScreen";
+import { LogoMark } from "./landing/brand/Logo";
 import Landing from "./landing/Landing";
 import type { User } from "./types";
 import { applyTheme } from "./utils";
@@ -117,7 +118,7 @@ export default function Root() {
   if (user === undefined)
     return (
       <Centered>
-        <BookOpen className="text-brand-500" />
+        <LogoMark size={44} />
         <Loader2 size={18} className="mt-3 animate-spin text-stone-400" />
       </Centered>
     );
@@ -140,7 +141,7 @@ export default function Root() {
     <Suspense
       fallback={
         <Centered>
-          <BookOpen className="text-brand-500" />
+          <LogoMark size={44} />
           <Loader2 size={18} className="mt-3 animate-spin text-stone-400" />
         </Centered>
       }

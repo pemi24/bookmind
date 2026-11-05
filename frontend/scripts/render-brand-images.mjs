@@ -34,16 +34,20 @@ if (!browser) {
   process.exit(1);
 }
 
-const glyph = `
-  <path d="M7.5 10.2c2.9-1.2 5.8-.9 8.5.9v11.5c-2.7-1.8-5.6-2.1-8.5-.9z" fill="${PAPER}"/>
-  <path d="M16 11.1C18.7 9.3 21.6 9 24.5 10.2V25l-3.1-2.9C19.6 21.6 17.7 21.8 16 22.6z" fill="${PAPER}" opacity=".82"/>
-  <path d="M10 13.6c1.3-.3 2.6-.1 3.9.5M10 16.4c1.3-.3 2.6-.1 3.9.5" stroke="${ACCENT}" stroke-width="1.1" stroke-linecap="round" fill="none"/>`;
-const mark = (size) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="${size}" height="${size}"><rect width="32" height="32" rx="9" fill="${ACCENT}"/>${glyph}</svg>`;
-/** The glyph on a full-bleed square (the OS rounds or masks the corners). `inset` = padding fraction. */
-const fullBleed = (size, inset) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="${size}" height="${size}"><rect width="32" height="32" fill="${ACCENT}"/>
-   <g transform="translate(${16 - 16 * (1 - 2 * inset) * 1.15} ${16 - 16 * (1 - 2 * inset) * 1.15}) scale(${(1 - 2 * inset) * 1.15})">${glyph}</g></svg>`;
+// The logo symbol (from the original artwork, prepared by scripts/prepare-logo.py: run that first),
+// as in src/landing/brand/Logo.tsx.
+const SYMBOL = pathToFileURL(join(root, "public/brand/symbol-light.png")).href;
+const SYMBOL_RATIO = 640 / 354; // width / height of public/brand/symbol-*.png
+/** The symbol centred on a cream tile (icons). `width`: symbol width as a share of the tile; `radius`
+ * (% of the size) 0 = square corners (the OS rounds or masks app icons itself). */
+const tile = (size, width, radius) =>
+  `<div style="width:${size}px;height:${size}px;background:${PAPER};border-radius:${radius}%;display:flex;align-items:center;justify-content:center">
+    <img src="${SYMBOL}" style="width:${size * width}px;height:${(size * width) / SYMBOL_RATIO}px"></div>`;
+/** The symbol with "Book Mind" beside it, `size` pixels tall. */
+const lockup = (size) =>
+  `<div style="display:flex;align-items:center;gap:${size * 0.3}px">
+    <img src="${SYMBOL}" style="height:${size}px;width:${size * SYMBOL_RATIO}px">
+    <span style="font-family:Newsreader;font-size:${size * 0.8}px;font-weight:600;letter-spacing:-0.02em;line-height:1">Book<span style="font-weight:400;font-style:italic">Mind</span></span></div>`;
 
 const font = (file) => pathToFileURL(join(root, "node_modules/@fontsource-variable", file)).href;
 const page = (w, h, body) => `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -59,9 +63,8 @@ const og = page(
   `<div style="box-sizing:border-box;width:1200px;height:630px;background:${PAPER};padding:72px 80px;display:flex;gap:56px;align-items:center;font-family:Inter;color:${INK};position:relative;overflow:hidden">
     <div style="position:absolute;right:-160px;top:-120px;width:620px;height:620px;border-radius:50%;background:#e3efe8;filter:blur(30px)"></div>
     <div style="flex:1.1;position:relative">
-      <div style="display:flex;align-items:center;gap:14px">${mark(52)}
-        <span style="font-family:Newsreader;font-size:40px;font-weight:600;letter-spacing:-0.5px">Book<span style="font-weight:400;font-style:italic">Mind</span></span></div>
-      <div style="font-family:Newsreader;font-size:96px;line-height:1;font-weight:500;letter-spacing:-2px;margin-top:56px">Talk to<br>any book.</div>
+      ${lockup(50)}
+      <div style="font-family:Newsreader;font-size:96px;line-height:1;font-weight:500;letter-spacing:-2px;margin-top:48px">Talk to<br>any book.</div>
       <div style="font-size:28px;line-height:1.4;color:${MUTED};margin-top:28px;max-width:520px">Cited answers from your own books. Then listen to them read aloud.</div>
     </div>
     <div style="flex:1;position:relative;background:#fffdf8;border:1px solid #e7e0d2;border-radius:28px;box-shadow:0 30px 60px -30px rgba(31,29,26,.35);padding:28px">
@@ -76,12 +79,12 @@ const og = page(
 
 const jobs = [
   { out: "public/og-image.png", w: 1200, h: 630, html: og },
-  { out: "public/icons/favicon-64.png", w: 64, h: 64, html: page(64, 64, mark(64)) },
-  { out: "public/icons/icon-192.png", w: 192, h: 192, html: page(192, 192, mark(192)) },
-  { out: "public/icons/icon-512.png", w: 512, h: 512, html: page(512, 512, mark(512)) },
-  { out: "public/icons/apple-touch-icon.png", w: 180, h: 180, html: page(180, 180, fullBleed(180, 0.08)) },
+  { out: "public/icons/favicon-64.png", w: 64, h: 64, html: page(64, 64, tile(64, 0.94, 22)) },
+  { out: "public/icons/icon-192.png", w: 192, h: 192, html: page(192, 192, tile(192, 0.84, 22)) },
+  { out: "public/icons/icon-512.png", w: 512, h: 512, html: page(512, 512, tile(512, 0.84, 22)) },
+  { out: "public/icons/apple-touch-icon.png", w: 180, h: 180, html: page(180, 180, tile(180, 0.82, 0)) },
   // maskable: everything inside the central 80% "safe zone"
-  { out: "public/icons/icon-maskable-512.png", w: 512, h: 512, html: page(512, 512, fullBleed(512, 0.2)) },
+  { out: "public/icons/icon-maskable-512.png", w: 512, h: 512, html: page(512, 512, tile(512, 0.7, 0)) },
 ];
 
 const tmp = mkdtempSync(join(tmpdir(), "bookmind-brand-"));

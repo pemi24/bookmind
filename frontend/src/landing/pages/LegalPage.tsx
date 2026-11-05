@@ -25,7 +25,7 @@ export default function LegalPage({ page }: { page: "privacy" | "terms" }) {
       <header className="border-b border-line">
         <nav aria-label="Main" className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5 sm:px-8">
           <a href="#/" aria-label="BookMind home" className="rounded-lg focus-visible:outline-2 focus-visible:outline-accent">
-            <Logo />
+            <Logo size={30} />
           </a>
           <ButtonLink href="#/signup">Get started free</ButtonLink>
         </nav>

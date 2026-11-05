@@ -82,7 +82,7 @@ export function NavBar() {
           className="rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           aria-label="BookMind, back to top"
         >
-          <Logo />
+          <Logo size={30} />
         </a>
         <ul className="ml-4 hidden items-center gap-1 lg:flex">
           {nav.links.map((l) => (

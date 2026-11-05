@@ -336,7 +336,7 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: (u: User) => vo
           className="relative w-fit rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-on-panel"
           aria-label="BookMind home"
         >
-          <Logo onPanel />
+          <Logo onPanel size={32} />
         </a>
         <div className="relative flex flex-1 items-center py-10">
           <AuthShowcase />
@@ -350,7 +350,7 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: (u: User) => vo
             className="rounded-lg focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent lg:hidden"
             aria-label="BookMind home"
           >
-            <Logo />
+            <Logo size={30} />
           </a>
           <a
             href="#/"

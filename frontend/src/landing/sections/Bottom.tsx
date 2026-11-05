@@ -97,7 +97,7 @@ export function Footer() {
     <footer className="border-t border-line px-5 pt-16 pb-24 sm:px-8">
       <div className="mx-auto grid max-w-6xl gap-12 md:grid-cols-[1.4fr_repeat(3,1fr)]">
         <div>
-          <Logo />
+          <Logo size={30} />
           <p className="mt-4 max-w-xs text-ink-muted">{footer.tagline}</p>
           <ul className="mt-6 flex gap-2" aria-label="Elsewhere">
             {footer.social.map((s) => (
