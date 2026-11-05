@@ -1,7 +1,8 @@
-import { BookmarkPlus, BookOpen, Copy, History, Loader2, Mic, MicOff, Pause, Pencil, Play, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2 } from "lucide-react";
+import { BookmarkPlus, Copy, History, Loader2, Mic, MicOff, Pause, Pencil, Play, Plus, Quote, RotateCcw, SendHorizonal, Square, Trash2, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamChat } from "../api";
 import { useReplyPlayer, type ReplyPlayback } from "../audio/useReplyPlayer";
+import { LogoMark } from "../landing/brand/Logo";
 import type { ChatMessage, ConversationSummary, Source, Style } from "../types";
 import { useWorkspace } from "../workspace";
 import AnswerMarkdown, { stripCitations } from "./AnswerMarkdown";
@@ -522,7 +523,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
             // Welcome, centred like a new chat: a large greeting for this book, starter questions as chips.
             <div className="flex min-h-[40vh] flex-col items-center justify-center text-center sm:min-h-[55vh]">
               <h2 className="flex max-w-2xl items-start justify-center gap-2.5 font-serif text-2xl leading-snug font-normal text-stone-800 sm:gap-3 sm:text-3xl md:text-4xl dark:text-stone-100">
-                <BookOpen className="mt-1 size-6 shrink-0 text-brand-500 sm:size-7 md:size-9" aria-hidden />
+                <LogoMark className="mt-1" imgClassName="h-6 w-auto sm:h-7 md:h-9" />
                 <span>
                   {greeting[0]}
                   <em>{book.title}</em>
