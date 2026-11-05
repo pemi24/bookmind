@@ -465,6 +465,19 @@ accounts' chapters and listening positions. A real Piper voice is tested with
 `BOOKMIND_TEST_PIPER=1 pytest tests/test_tts.py` (it loads a voice). `stress_large_book.py` runs against
 the running backend (start it first); the test book is deleted afterwards.
 
+The frontend has its own lint and unit tests (no backend needed):
+
+```bash
+cd frontend
+npm run lint                             # ESLint: TypeScript and React hooks rules
+npm test                                 # Vitest unit tests (jsdom)
+npm run build                            # type-check and production build
+```
+The unit tests cover the pure logic: text helpers (loose quote matching for highlights, the spoiler
+guard limit, preferences, theme), voice resolution and its fallback notices, and the read-aloud
+queue (sentence order, pause/resume/seek, clips synthesized ahead and freed after playing, and
+carrying on with the browser's voice when no server voice can speak).
+
 ---
 
 ## 8. Troubleshooting

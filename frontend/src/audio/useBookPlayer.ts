@@ -115,7 +115,6 @@ export function useBookPlayer({
     setCurrent(null);
     setPreparing(false);
     setSleepState({ kind: "off" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [save, current]);
 
   /** Start reading at the first sentence that ends after `offset` in a chapter (or, past its last

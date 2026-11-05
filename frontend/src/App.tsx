@@ -15,12 +15,10 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { account, api, watchProgress } from "./api";
-import AdminPage from "./components/AdminPage";
 import BookMemory from "./components/BookMemory";
 import ChatPanel from "./components/ChatPanel";
-import Discover from "./components/Discover";
 import Library from "./components/Library";
 import EssayPanel from "./components/panels/EssayPanel";
 import ExplorerPanel from "./components/panels/ExplorerPanel";
@@ -30,12 +28,16 @@ import StudyPanel from "./components/panels/StudyPanel";
 import SummariesPanel from "./components/panels/SummariesPanel";
 import TimelinePanel from "./components/panels/TimelinePanel";
 import ReaderPanel, { type ReaderTarget } from "./components/ReaderPanel";
-import SettingsPage from "./components/SettingsPage";
 import Sidebar, { type Page } from "./components/Sidebar";
-import StatsPage from "./components/StatsPage";
 import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source, User } from "./types";
 import { applyTheme, isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
+
+// Pages away from the library and the book load on first visit, keeping the first download small.
+const AdminPage = lazy(() => import("./components/AdminPage"));
+const Discover = lazy(() => import("./components/Discover"));
+const SettingsPage = lazy(() => import("./components/SettingsPage"));
+const StatsPage = lazy(() => import("./components/StatsPage"));
 
 /* ---------- hash router: #/  ·  #/discover|stats|settings|admin  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
 const TABS = [
@@ -422,10 +424,12 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
               <span className="font-semibold">BookMind</span>
             </div>
             <div className="min-h-0 flex-1">
-              {route.page === "discover" && <Discover books={books} onAdded={(b) => setBooks((bs) => [b, ...bs])} />}
-              {route.page === "stats" && <StatsPage onOpenBook={(id) => navigate(`#/book/${id}`)} />}
-              {route.page === "settings" && <SettingsPage user={user} onUser={onUser} onSignOut={onSignOut} />}
-              {route.page === "admin" && (user.is_admin ? <AdminPage /> : <p className="p-6 text-center text-stone-500">This page doesn't exist.</p>)}
+              <Suspense fallback={<Loader2 size={20} className="mx-auto mt-10 animate-spin text-stone-400" />}>
+                {route.page === "discover" && <Discover books={books} onAdded={(b) => setBooks((bs) => [b, ...bs])} />}
+                {route.page === "stats" && <StatsPage onOpenBook={(id) => navigate(`#/book/${id}`)} />}
+                {route.page === "settings" && <SettingsPage user={user} onUser={onUser} onSignOut={onSignOut} />}
+                {route.page === "admin" && (user.is_admin ? <AdminPage /> : <p className="p-6 text-center text-stone-500">This page doesn't exist.</p>)}
+              </Suspense>
               {route.page === "library" && loaded && (
                 <Library
                   books={books}

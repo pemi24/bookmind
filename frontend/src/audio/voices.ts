@@ -177,7 +177,7 @@ export function resolveVoice(catalog: VoiceCatalog, saved: string): ResolvedVoic
   const hit = findVoice(catalog, wanted);
   if (hit) return { id: wanted, ...hit, notice: null };
   const fallback = findVoice(catalog, catalog.default_voice) ?? findVoice(catalog, BROWSER_DEFAULT);
-  const id = fallback?.voice?.id ?? (fallback ? catalog.default_voice : BROWSER_DEFAULT);
+  const id = fallback?.voice?.id ?? BROWSER_DEFAULT; // a hit without a voice is the browser default
   // Browser voices are known only once the browser lists them: don't complain while it's loading.
   const waiting = catalog.loading || (wanted.startsWith("browser:") && !catalog.providers.find((p) => p.id === "browser")?.voices.length);
   return {

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -9,5 +10,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: { "/api": { target: backend, changeOrigin: true } },
+  },
+  build: {
+    rollupOptions: {
+      // Libraries change less often than the app: separate files stay cached between releases.
+      output: { manualChunks: { react: ["react", "react-dom"], markdown: ["react-markdown", "remark-gfm"] } },
+    },
+  },
+  test: {
+    environment: "jsdom",
+    pool: "threads", // forks can time out starting on a busy Windows machine
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });

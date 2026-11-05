@@ -98,8 +98,9 @@ export default function ExplorerPanel({ dark }: { dark: boolean }) {
   const [view, setView] = useState<"graph" | "list">(() => (window.innerWidth < 768 ? "list" : "graph"));
   const [mentions, setMentions] = useState<Mention[] | null>(null);
 
-  const entities = data?.entities ?? [];
-  const relations = data?.relations ?? [];
+  // Memoized so the empty lists while loading don't change identity on every render (and re-lay out the graph).
+  const entities = useMemo(() => data?.entities ?? [], [data]);
+  const relations = useMemo(() => data?.relations ?? [], [data]);
   const byId = useMemo(() => new Map(entities.map((e) => [e.id, e])), [entities]);
   const kinds = useMemo(() => [...new Set(entities.map((e) => e.kind))], [entities]);
 

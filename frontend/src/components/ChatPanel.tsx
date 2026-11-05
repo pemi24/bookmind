@@ -18,9 +18,10 @@ const STYLES: { value: Style; label: string }[] = [
 type Mode = "ask" | "persona" | "compare";
 
 /* ---------- Web Speech API (optional; feature-detected) ---------- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+/* eslint-disable @typescript-eslint/no-explicit-any -- speech recognition isn't in TypeScript's DOM types */
 const SpeechRecognitionImpl: any =
   typeof window !== "undefined" ? (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition : undefined;
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 function plainText(markdown: string): string {
   return markdown.replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, "").replace(/[*_#>`]/g, "").replace(/\s+/g, " ").trim();
