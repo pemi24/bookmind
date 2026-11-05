@@ -147,6 +147,13 @@ class Settings(BaseSettings):
     tts_default_voice: str = ""
     tts_max_chars: int = 1500  # per synthesis request (the app sends a sentence or a few at a time)
     tts_rate_limit: int = 150  # synthesis requests per user per minute
+    # Synthesized audio is kept on disk (one folder per user) so listening again is instant. The
+    # least recently used files go first once the cache is over its size; files unused for
+    # TTS_CACHE_MAX_AGE_DAYS go too (0 = no age limit).
+    tts_cache_enabled: bool = True
+    tts_cache_dir: Path = BACKEND_DIR / "data" / "tts_cache"
+    tts_cache_max_mb: int = 1000  # all users together; about 6 hours of Piper audio
+    tts_cache_max_age_days: int = 60
     # Piper (local neural voices, offline). Download them with scripts/download_voices.py.
     piper_voices_dir: Path = BACKEND_DIR / "data" / "voices"
     # Which downloaded voices to offer (and which download_voices.py fetches); empty = every

@@ -60,8 +60,14 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * **Reading stats** — time read per day, streaks, books finished, quiz scores, flashcard progress.
 * **Install on your phone** — open BookMind from an iPhone or Android phone on the same Wi-Fi and
   add it to the home screen (see §5).
-* Suggested starter questions, dark/light mode, responsive layout, voice input and read-aloud
-  (browser speech APIs).
+* **Listen** — chat replies and the book itself read aloud by natural voices that run on your
+  computer (Piper, free and offline), your device's own voices, or optional cloud voices. In the
+  reader the sentence being read is highlighted and followed; skip by sentence, paragraph or
+  chapter, set a sleep timer, and **Continue listening** where you stopped. Works from the lock
+  screen and headphone buttons. Pick separate voices for chat and books in **Settings → Listening**
+  (see §4).
+* Suggested starter questions, dark/light mode, responsive layout, voice input (browser speech
+  recognition).
 
 ---
 
@@ -249,6 +255,64 @@ passages, a shorter book memory). OpenRouter never charges a key whose account h
 and BookMind refuses non-free OpenRouter models. Each provider receives your questions and the book
 passages sent with them; check their privacy terms for private books.
 
+### Voices for listening (text-to-speech)
+
+Listening works with no API key. Two kinds of voices are always possible:
+
+* **Piper** — natural neural voices that run on your computer, offline and free. The `piper-tts`
+  package is in `requirements.txt` (the start scripts install it); the voices are downloaded once.
+* **Your device's own voices** (the browser's speech engine) — nothing to install; BookMind falls
+  back to them whenever a server voice can't speak.
+
+Download the Piper voices (about 60 MB each) from the `backend` folder, with its virtual
+environment active:
+
+```bash
+# Windows
+cd backend
+.venv\Scripts\activate
+python scripts\download_voices.py
+
+# macOS / Linux
+cd backend
+source .venv/bin/activate
+python scripts/download_voices.py
+```
+
+That fetches the voices listed in `PIPER_VOICES` into `backend/data/voices`. The defaults are
+American (Lessac, female; Ryan, male; Amy, female) and British (Alba, Scottish female; Northern
+English, male). To see others — more accents, other languages — and add them:
+
+```bash
+python scripts/download_voices.py --list         # English and French voices, with sizes
+python scripts/download_voices.py --list de es   # other languages
+python scripts/download_voices.py fr_FR-siwis-medium
+```
+then add the name to `PIPER_VOICES` in `backend/.env` and restart. Prefer **medium** voices: on an
+ordinary CPU they synthesize several times faster than real time, while **high** ones can be
+slower than real time (reading would stutter). A voice takes a few seconds to load the first
+time it's used (the default voice is loaded at start-up); up to `PIPER_MAX_LOADED` stay in memory
+(~150 MB each). If `pip install piper-tts` fails on an unusual platform, BookMind still works with
+the device's voices.
+
+**Cloud voices (optional).** Each appears in the voice list only when its key is set:
+```ini
+OPENAI_API_KEY=...        # OpenAI voices (alloy, nova, onyx...), billed per character
+ELEVENLABS_API_KEY=...    # your ElevenLabs voices, billed per character
+TTS_GOOGLE_ENABLED=true   # Google's Gemini voices, using GEMINI_API_KEY
+```
+Google voices are off unless you turn them on because they share `GEMINI_API_KEY` with chat:
+listening to a book would use up the free chat quota. Cloud voices receive the text being read.
+
+**The audio cache.** Every sentence synthesized on the server is saved under
+`backend/data/tts_cache/user-<id>/` (and listed in the `audio_cache` table), keyed by voice, speed
+and a hash of the text. Hearing it again — re-reading a page, a voice preview, a reply — plays
+at once and doesn't count toward the listening rate limit. Each account has its own entries, so
+nobody gets another account's audio, and deleting an account deletes its audio. The cache is
+capped by `TTS_CACHE_MAX_MB` (1000 MB, about 6 hours of Piper audio; the least recently played
+files go first) and `TTS_CACHE_MAX_AGE_DAYS` (60). Set `TTS_CACHE_ENABLED=false` to turn it off.
+Device voices are never cached (the browser speaks them itself).
+
 ---
 
 ## 5. Run
@@ -354,7 +418,12 @@ oversized uploads, database down, AI model unreachable). Accounts are covered to
 sign-in rules, sessions, CSRF, rate limits and lockout, password reset and email verification,
 settings, export and account deletion, the admin page, per-account limits, and isolation (a second
 account gets 404 from every endpoint for the first account's books, chats, notes and files, and
-search never returns another account's passages). `stress_large_book.py` runs against
+search never returns another account's passages). Listening is covered by text cleaning for speech
+(markdown, citation markers, URLs, emoji), sentence splitting (abbreviations, initials, quotes, very
+long chapters), provider selection and fallback, the cloud voices' requests (mocked), the audio
+cache (hits, per-account entries, size and age limits), voice preferences, and 404s for other
+accounts' chapters and listening positions. A real Piper voice is tested with
+`BOOKMIND_TEST_PIPER=1 pytest tests/test_tts.py` (it loads a voice). `stress_large_book.py` runs against
 the running backend (start it first); the test book is deleted afterwards.
 
 ---
@@ -368,6 +437,13 @@ the running backend (start it first); the test book is deleted afterwards.
 | "Too many failed sign-in attempts" | Wait up to 15 minutes, then try again (or use **Forgot password?**). |
 | "Your session token is missing or out of date" | Reload the page. If it keeps happening, sign out and in again. |
 | The phone shows the old version / no sign-in page | Refresh the page once (the installed app caches the previous version). |
+| Settings → Listening says "No Piper voices downloaded" | Run `python scripts/download_voices.py` in `backend` (venv active) and restart. Check that `PIPER_VOICES` names voices that are in `backend/data/voices`. |
+| "Piper isn't installed" | `pip install piper-tts` in the backend's virtual environment, then restart. Until then, your device's voices read aloud. |
+| The first sentence takes a long time with a new voice | Loading a Piper voice takes several seconds (more on a slow CPU); later sentences start at once. The default voice is loaded at start-up; set `TTS_DEFAULT_VOICE` to the one you use most. |
+| Reading aloud stutters or pauses between sentences | Use a **medium** Piper voice rather than **high** (it must synthesize faster than it speaks), or lower the speed. |
+| "Your saved voice isn't available any more" | That voice was removed (not in `PIPER_VOICES`, or a cloud key was taken out). Pick another in **Settings → Listening**; until then the default voice reads. |
+| No device voices in the list | Some browsers (and Linux without speech-dispatcher) have none installed. Use a Piper voice, or install voices in your OS (Windows: Settings → Time & language → Speech). |
+| Read-aloud stops when the phone screen locks | Phones may pause web audio in the background; use the lock-screen play button to resume. Installing BookMind to the home screen helps. |
 | `password authentication failed for user` | Wrong password in `DATABASE_URL`, or special characters not URL-encoded. |
 | `fe_sendauth: no password supplied` | `DATABASE_URL` has no password; add one. |
 | `connection refused` / `could not connect to server` | PostgreSQL isn't running. Windows: `services.msc` → `postgresql-x64-NN` → Start. macOS: `brew services start postgresql@17`. Linux: `sudo systemctl start postgresql`. Check the port (`port` in `postgresql.conf`). |

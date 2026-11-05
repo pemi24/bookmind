@@ -10,6 +10,7 @@
    ├─ api/chat.py    grounded chat (SSE)       ├─▶ conversations, messages, citations
    ├─ ingestion/     background indexing task  │   notes, summaries, quizzes, flashcards
    ├─ retrieval/     hybrid search + rerank    │   entities, relations, timeline_events
+   ├─ tts/, api/tts.py  voices, read-aloud     │   audio_cache (+ files in data/tts_cache/)
    └─ llm/           provider layer + prompts  ┘
         │  LLM_PROVIDER
         ▼
@@ -164,3 +165,45 @@ To add a provider: subclass `LLMProvider` in `app/llm/providers/`, implement `st
   `DAILY_MESSAGE_LIMIT`.
 * **Upgrading**: migration 0005 creates the admin from `ADMIN_EMAIL` and gives it all existing data;
   `scripts/create_admin.py` sets its password. Both migrations downgrade cleanly.
+
+## Listening / text-to-speech (`app/tts/`, `api/tts.py`, `frontend/src/audio/`)
+
+* **Providers** (`tts/base.py`): `TTSProvider` with `info()` (available? why not? voices),
+  `synthesize(text, voice, speed, volume)`, `stream(sentences, ...)` and `supports_streaming`.
+  Voice ids are `provider:voice`. `TTS_PROVIDERS` lists the ones to offer; each also needs its own
+  setup and is hidden otherwise:
+  * `piper.py`: local ONNX voices from `PIPER_VOICES_DIR`. Synthesis runs on a small thread pool
+    (ONNX Runtime releases the GIL), so the event loop never waits on it. Voices load on first use
+    (seconds), the least recently used is unloaded beyond `PIPER_MAX_LOADED`, and the default voice
+    is loaded at start-up.
+  * `browser.py`: the browser's Web Speech voices. Listed and spoken by the frontend; always there.
+  * `cloud.py`: OpenAI, ElevenLabs and Google (Gemini) over HTTP, only with their keys.
+* **Fallback** (`tts/__init__.py`, `Registry.speak`): a missing voice or a failing provider falls
+  back to the server's default voice, with a note the app shows; when nothing on the server can
+  speak, the API answers 503 with `fallback: "browser"` and the app carries on with device voices.
+* **Text** (`tts/text.py`): `clean_for_speech()` strips markdown, citation markers, URLs, code and
+  emoji from chat replies; `split_sentences()` returns sentences with character offsets (handling
+  abbreviations, initials and quotes, cutting very long sentences at commas). It is linear in the
+  text's length, since the reader asks for whole chapters.
+* **Playback** is sentence by sentence (`audio/queue.ts`): the app asks for a reply's or a
+  chapter's sentences, then each sentence's audio, three ahead of the one playing, so speech
+  starts after one sentence and runs without gaps. One `Audio` element is reused, clips are
+  freed after playing, and only one thing plays at a time (`claimAudio`). Speed beyond what a
+  provider supports is made up by the browser's playback rate; volume is always applied by the
+  browser (the server is asked for volume 1.0, which keeps the cache simple).
+* **The reader** (`audio/useBookPlayer.ts`, `components/ListenBar.tsx`) gets
+  `/api/tts/chapters/{id}/sentences` (offsets and paragraph starts) and highlights the sentence being
+  read with the CSS Custom Highlight API: a `Range` over the existing text nodes, so a long chapter
+  is never re-rendered (a `<mark>` range is the fallback). The next chapter's sentences are
+  queued a few sentences before the end. The listening position (`books.listen_position/offset`,
+  migration 0007) is saved every few seconds and on pause; it is separate from the reading
+  bookmark. Media Session handlers give lock-screen and headphone controls.
+* **Cache** (`tts/cache.py`, migration 0008): `audio_cache` rows (user, provider, voice, speed,
+  sha256 of the text, size, file path, last played) with the audio in
+  `TTS_CACHE_DIR/user-<id>/`. A hit is served without synthesis and without counting toward
+  `TTS_RATE_LIMIT`. Entries are per user (rows cascade with the account, files are deleted with
+  it). `prune()` runs at start-up and whenever enough new audio was written: entries unused for
+  `TTS_CACHE_MAX_AGE_DAYS`, then the least recently played until under 90% of `TTS_CACHE_MAX_MB`.
+* **Preferences** (chat voice, reading voice, speed, pitch, volume, auto-read) live in
+  `users.settings`. Every TTS endpoint requires sign-in; chapters and listening positions of other
+  accounts' books answer 404. `TTS_MAX_CHARS` bounds a synthesis request.

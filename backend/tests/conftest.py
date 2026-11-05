@@ -27,6 +27,7 @@ if _base and not _base.rstrip("/").endswith("_test"):
     os.environ["DATABASE_URL"] = f"{head}/{name.split('?')[0]}_test"
 os.environ.setdefault("RERANK_ENABLED", "true")
 os.environ["UPLOAD_DIR"] = tempfile.mkdtemp(prefix="bookmind-test-uploads-")  # never the real library folder
+os.environ["TTS_CACHE_DIR"] = tempfile.mkdtemp(prefix="bookmind-test-tts-cache-")  # nor the real audio cache
 os.environ["BOOKMIND_ENV_OVERRIDE"] = "1"  # let these variables beat backend/.env (also in subprocesses)
 
 _db_ready: bool | None = None

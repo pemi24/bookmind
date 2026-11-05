@@ -269,6 +269,27 @@ class Translation(Base):
     __table_args__ = (UniqueConstraint("chapter_id", "language", name="uq_translations_chapter_language"),)
 
 
+class AudioCacheEntry(Base):
+    """Synthesized speech saved on disk (TTS_CACHE_DIR), so listening again doesn't re-synthesize.
+    Per user: the same sentence read for two people is two entries, and nobody gets another's audio."""
+
+    __tablename__ = "audio_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(30))
+    voice: Mapped[str] = mapped_column(String(200))  # "provider:voice"
+    speed: Mapped[float] = mapped_column(Float)  # rounded to 2 decimals
+    text_hash: Mapped[str] = mapped_column(String(64))  # sha256 of the text
+    mime: Mapped[str] = mapped_column(String(40))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(300))  # relative to TTS_CACHE_DIR
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (UniqueConstraint("user_id", "voice", "speed", "text_hash", name="uq_audio_cache_key"),)
+
+
 class ActivityDay(Base):
     """Per book, per day: time spent reading and flashcards reviewed (reading stats)."""
 

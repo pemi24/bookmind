@@ -294,7 +294,8 @@ async def test_api_limits(test_db, fake_registry, monkeypatch):
         assert r.status_code == 413
         monkeypatch.setattr(get_settings(), "tts_rate_limit", 2)
         ratelimit.reset(f"tts:{c.user['id']}")
-        codes = [(await c.post("/api/tts/speak", json={"text": "Hi.", "voice": "piper:a"})).status_code for _ in range(3)]
+        # different sentences: the same one again would come from the cache, which isn't limited
+        codes = [(await c.post("/api/tts/speak", json={"text": f"Hi {n}.", "voice": "piper:a"})).status_code for n in range(3)]
         assert codes == [200, 200, 429]
 
 
@@ -385,6 +386,130 @@ async def test_listening_position_is_saved_and_private(test_db):
 
         assert (await a.delete(f"/api/tts/books/{book_id}/listening")).status_code == 204
         assert (await a.get(f"/api/books/{book_id}")).json()["listening"] is None
+
+
+# ---------- audio cache ----------
+
+
+@pytestmark_api
+async def test_cache_hits_skip_synthesis(test_db, fake_registry):
+    piper = fake_registry.providers["piper"]
+    async with signed_in(_app()) as a:
+        say = lambda **kw: a.post("/api/tts/speak", json={"text": "The fox waited.", "voice": "piper:b", **kw})  # noqa: E731
+        first, again = await say(), await say()
+        assert first.headers["x-tts-cache"] == "miss" and again.headers["x-tts-cache"] == "hit"
+        assert again.content == first.content and again.headers["content-type"] == "audio/wav"
+        assert len(piper.calls) == 1
+        # another speed or voice is another recording; a non-default volume is never cached
+        assert (await say(speed=1.5)).headers["x-tts-cache"] == "miss"
+        assert (await say(speed=1.5)).headers["x-tts-cache"] == "hit"
+        assert (await a.post("/api/tts/speak", json={"text": "The fox waited.", "voice": "piper:a"})).headers["x-tts-cache"] == "miss"
+        assert (await say(volume=0.5)).headers["x-tts-cache"] == "miss"
+        assert (await say(volume=0.5)).headers["x-tts-cache"] == "miss"
+        assert len(piper.calls) == 5
+        # previews are cached the same way
+        assert (await a.get("/api/tts/preview", params={"voice": "piper:b"})).headers["x-tts-cache"] == "miss"
+        assert (await a.get("/api/tts/preview", params={"voice": "piper:b"})).headers["x-tts-cache"] == "hit"
+
+
+@pytestmark_api
+async def test_cache_hits_dont_count_toward_the_rate_limit(test_db, fake_registry, monkeypatch):
+    from app.auth import ratelimit
+
+    async with signed_in(_app()) as a:
+        monkeypatch.setattr(get_settings(), "tts_rate_limit", 1)
+        ratelimit.reset(f"tts:{a.user['id']}")
+        say = lambda text: a.post("/api/tts/speak", json={"text": text, "voice": "piper:a"})  # noqa: E731
+        assert (await say("One.")).status_code == 200
+        assert [(await say("One.")).status_code for _ in range(3)] == [200, 200, 200]  # all from the cache
+        assert (await say("Two.")).status_code == 429
+
+
+@pytestmark_api
+async def test_cache_is_per_user(test_db, fake_registry):
+    from app.db.models import AudioCacheEntry
+    from app.db.session import SessionLocal
+    from app.tts import cache as audio_cache
+    from sqlalchemy import select
+
+    piper = fake_registry.providers["piper"]
+    async with signed_in(_app()) as a, signed_in(_app()) as b:
+        text = "A sentence both of them hear."
+        await a.post("/api/tts/speak", json={"text": text, "voice": "piper:a"})
+        r = await b.post("/api/tts/speak", json={"text": text, "voice": "piper:a"})
+        assert r.headers["x-tts-cache"] == "miss" and len(piper.calls) == 2  # B never gets A's audio
+        async with SessionLocal() as db:
+            rows = (await db.execute(select(AudioCacheEntry).where(
+                AudioCacheEntry.text_hash == audio_cache.key(text, 1)[0],
+                AudioCacheEntry.user_id.in_([a.user["id"], b.user["id"]])))).scalars().all()
+        assert sorted(r.user_id for r in rows) == sorted([a.user["id"], b.user["id"]])
+        assert {r.path.split("/")[0] for r in rows} == {f"user-{a.user['id']}", f"user-{b.user['id']}"}
+        # deleting an account deletes its cached audio
+        assert audio_cache.user_dir(b.user["id"]).exists()
+        assert (await b.post("/api/account/delete", json={"password": "correct horse battery"})).status_code == 200
+        assert not audio_cache.user_dir(b.user["id"]).exists()
+        async with SessionLocal() as db:
+            assert not (await db.execute(select(AudioCacheEntry).where(AudioCacheEntry.user_id == b.user["id"]))).first()
+
+
+@pytestmark_api
+async def test_fallback_audio_is_cached_under_the_voice_that_spoke(test_db, fake_registry):
+    async with signed_in(_app()) as a:
+        r = await a.post("/api/tts/speak", json={"text": "Hello.", "voice": "cloud:a"})  # cloud fails → piper:a
+        assert unquote(r.headers["x-tts-voice"]) == "piper:a"
+        again = await a.post("/api/tts/speak", json={"text": "Hello.", "voice": "cloud:a"})
+        assert again.headers["x-tts-cache"] == "miss"  # not served as if the cloud voice had said it
+        assert (await a.post("/api/tts/speak", json={"text": "Hello.", "voice": "piper:a"})).headers["x-tts-cache"] == "hit"
+
+
+@pytestmark_api
+async def test_cache_prunes_old_and_least_recently_used(test_db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import delete, select, update
+
+    from app.db.models import AudioCacheEntry
+    from app.db.session import SessionLocal
+    from app.tts import cache as audio_cache
+
+    async with signed_in(_app()) as a:
+        uid = a.user["id"]
+        clip = Audio(b"\0" * 400_000, "audio/wav")
+        async with SessionLocal() as db:
+            await db.execute(delete(AudioCacheEntry))  # the test database's cache: only this test's entries count
+            await db.commit()
+            for n in range(4):
+                await audio_cache.put(db, uid, "piper:a", 1.0, f"sentence {n}", clip)
+            # sentence 0 hasn't been played for ages; sentence 1 was played just now
+            await db.execute(update(AudioCacheEntry).where(AudioCacheEntry.user_id == uid,
+                             AudioCacheEntry.text_hash == audio_cache.key("sentence 0", 1)[0])
+                             .values(last_used_at=datetime.now(timezone.utc) - timedelta(days=400)))
+            await db.commit()
+            assert await audio_cache.get(db, uid, "piper:a", 1.0, "sentence 1")
+            # 1.6 MB in the cache, limit 1 MB: the old one goes, then the least recently used until under 0.9 MB
+            monkeypatch.setattr(get_settings(), "tts_cache_max_mb", 1)
+            monkeypatch.setattr(get_settings(), "tts_cache_max_age_days", 60)
+            removed, freed = await audio_cache.prune(db)
+            left = {e.text_hash for e in (await db.execute(select(AudioCacheEntry).where(AudioCacheEntry.user_id == uid))).scalars()}
+        assert audio_cache.key("sentence 0", 1)[0] not in left  # too old
+        assert audio_cache.key("sentence 1", 1)[0] in left  # most recently played
+        assert len(left) == 2 and (removed, freed) == (2, 800_000)
+        files = list(audio_cache.user_dir(uid).iterdir())
+        assert len(files) == 2
+
+
+@pytestmark_api
+async def test_cache_entry_with_missing_file_is_synthesized_again(test_db, fake_registry):
+    from app.tts import cache as audio_cache
+
+    piper = fake_registry.providers["piper"]
+    async with signed_in(_app()) as a:
+        await a.post("/api/tts/speak", json={"text": "Gone soon.", "voice": "piper:a"})
+        for f in audio_cache.user_dir(a.user["id"]).iterdir():
+            f.unlink()
+        r = await a.post("/api/tts/speak", json={"text": "Gone soon.", "voice": "piper:a"})
+        assert r.status_code == 200 and r.headers["x-tts-cache"] == "miss" and len(piper.calls) == 2
+        assert (await a.post("/api/tts/speak", json={"text": "Gone soon.", "voice": "piper:a"})).headers["x-tts-cache"] == "hit"
 
 
 # ---------- real Piper (opt-in) ----------

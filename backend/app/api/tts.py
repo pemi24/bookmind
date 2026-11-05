@@ -21,7 +21,8 @@ from app.auth.deps import CurrentUser, current_user
 from app.config import get_settings
 from app.db.models import Chapter
 from app.db.session import get_db
-from app.tts import get_registry
+from app.tts import Spoken, get_registry
+from app.tts import cache as audio_cache
 from app.tts.base import TTSError
 from app.tts.text import clean_for_speech, split_sentences
 
@@ -46,11 +47,29 @@ def _no_voice(e: TTSError) -> JSONResponse:
     return JSONResponse({"detail": f"{e} Using this device's voices instead.", "fallback": "browser"}, 503)
 
 
-def _audio(spoken) -> Response:
-    headers = {"X-TTS-Voice": quote(spoken.voice), "Cache-Control": "private, max-age=86400"}
+def _audio(spoken, cache: str) -> Response:
+    headers = {"X-TTS-Voice": quote(spoken.voice), "X-TTS-Cache": cache, "Cache-Control": "private, max-age=86400"}
     if spoken.note:
         headers["X-TTS-Note"] = quote(spoken.note)  # headers are latin-1; the app decodes it
     return Response(spoken.audio.data, media_type=spoken.audio.mime, headers=headers)
+
+
+async def _speak(db: AsyncSession, user, text: str, voice: str, speed: float, volume: float = 1.0) -> Response:
+    """Audio from this user's cache when they've heard it before, else synthesized (and saved).
+    Only synthesis counts toward the rate limit. Volume is applied by the browser, so the app
+    always asks for 1.0; anything else isn't cached."""
+    cacheable = volume == 1.0
+    if cacheable and (hit := await audio_cache.get(db, user.id, voice, speed, text)):
+        return _audio(Spoken(hit, voice, None), "hit")
+    _limit(user)
+    try:
+        spoken = await get_registry().speak(text, voice, speed, volume)
+    except TTSError as e:
+        return _no_voice(e)
+    if cacheable:
+        # under the voice that actually spoke: a stand-in voice's audio isn't saved as the one asked for
+        await audio_cache.put(db, user.id, spoken.voice, speed, text, spoken.audio)
+    return _audio(spoken, "miss")
 
 
 @router.get("/voices")
@@ -83,15 +102,11 @@ class SpeakRequest(BaseModel):
 
 
 @router.post("/speak")
-async def speak(user: CurrentUser, req: SpeakRequest):
+async def speak(user: CurrentUser, req: SpeakRequest, db: AsyncSession = Depends(get_db)):
     limit = get_settings().tts_max_chars
     if len(req.text) > limit:
         raise HTTPException(413, f"Too much text at once ({len(req.text)} characters; the limit is {limit}).")
-    _limit(user)
-    try:
-        return _audio(await get_registry().speak(req.text, req.voice, req.speed, req.volume))
-    except TTSError as e:
-        return _no_voice(e)
+    return await _speak(db, user, req.text, req.voice, req.speed, req.volume)
 
 
 @router.get("/chapters/{chapter_id}/sentences")
@@ -136,13 +151,9 @@ async def clear_listening(user: CurrentUser, book_id: int, db: AsyncSession = De
 
 
 @router.get("/preview")
-async def preview(user: CurrentUser, voice: str = Query(max_length=200), speed: float = Query(1.0, ge=0.25, le=4.0)):
+async def preview(user: CurrentUser, voice: str = Query(max_length=200), speed: float = Query(1.0, ge=0.25, le=4.0),
+                  db: AsyncSession = Depends(get_db)):
     """A short sample of a voice, in its own language."""
-    _limit(user)
-    registry = get_registry()
-    found = await registry.find(voice)
+    found = await get_registry().find(voice)
     lang = (found[1].language if found and found[1] else "en")[:2].lower()
-    try:
-        return _audio(await registry.speak(_SAMPLES.get(lang, _SAMPLES["en"]), voice, speed))
-    except TTSError as e:
-        return _no_voice(e)
+    return await _speak(db, user, _SAMPLES.get(lang, _SAMPLES["en"]), voice, speed)

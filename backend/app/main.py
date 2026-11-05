@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
 from app.auth.deps import current_user
 from app.api import account, admin, auth, books, catalog, chat, features, library, notes, stats, study, tts
+from app.tts import cache as audio_cache
 from app.tts import get_registry
 from app.config import get_settings
 from app.db.models import AppMeta, Book
@@ -45,6 +46,15 @@ async def _llm_status(max_age: float = 10.0) -> ProviderStatus:
             _llm_cache["status"] = ProviderStatus(False, e.message)
         _llm_cache["at"] = loop.time()
     return _llm_cache["status"]
+
+
+async def _prune_audio_cache() -> None:
+    """Drop cached speech that's too old, or over the size limit (also checked as audio is added)."""
+    try:
+        async with SessionLocal() as db:
+            await audio_cache.prune(db)
+    except Exception as e:  # noqa: BLE001 - housekeeping only
+        log.warning("Couldn't tidy the audio cache: %s", e)
 
 
 async def _startup_checks() -> None:
@@ -105,6 +115,7 @@ async def lifespan(app: FastAPI):
         log.warning("=" * 70)
     warm = asyncio.create_task(asyncio.to_thread(_warm_models))
     warm_voice = asyncio.create_task(get_registry().warm_default())
+    asyncio.create_task(_prune_audio_cache())
     yield
     warm.cancel()
     warm_voice.cancel()
@@ -117,7 +128,7 @@ app.add_middleware(
     allow_origins=[o.strip() for o in get_settings().cors_origins.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-TTS-Voice", "X-TTS-Note"],
+    expose_headers=["X-TTS-Voice", "X-TTS-Note", "X-TTS-Cache"],
 )
 for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats, tts):
     app.include_router(module.router)

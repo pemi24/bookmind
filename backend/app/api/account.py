@@ -29,6 +29,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.llm.providers import PROVIDERS, create_provider
 from app.tts import KNOWN as TTS_PROVIDERS
+from app.tts import cache as audio_cache
 
 router = APIRouter(prefix="/api/account", tags=["account"], dependencies=[Depends(current_user)])
 HOUR = 60 * 60
@@ -318,11 +319,13 @@ async def delete_user_and_files(db: AsyncSession, user: User) -> None:
     """Removes the account, everything it owns (database cascade) and its book files."""
     paths = [Path(p) for p in (await db.execute(select(Book.file_path).where(Book.user_id == user.id))).scalars() if p]
     folder = user_upload_dir(user.id)
+    user_id = user.id
     await db.delete(user)
     await db.commit()
     for p in paths:
         p.unlink(missing_ok=True)
     shutil.rmtree(folder, ignore_errors=True)
+    audio_cache.remove_user(user_id)  # its rows went with the account
 
 
 @router.post("/delete")
