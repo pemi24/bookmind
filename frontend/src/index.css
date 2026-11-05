@@ -17,6 +17,47 @@
   --color-brand-900: #1e338a;
 }
 
+/* ---------- Landing page tokens (rebrand here) ----------
+   Semantic colours: dark mode swaps the values below, so components never need dark: variants. */
+@theme {
+  --font-display: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+  --font-body: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --color-paper: #faf7f0; /* page */
+  --color-paper-raised: #fffdf8; /* cards */
+  --color-paper-sunk: #f2ede2; /* wells, alternate sections */
+  --color-ink: #1f1d1a; /* text */
+  --color-ink-muted: #5c574e; /* secondary text (AA on paper) */
+  --color-line: #e7e0d2; /* borders */
+  --color-accent: #1f5c46; /* library green: buttons, highlights */
+  --color-accent-hover: #174a38;
+  --color-on-accent: #ffffff; /* text on accent */
+  --color-accent-ink: #1f5c46; /* links / accent text on paper */
+  --color-accent-soft: #e3efe8; /* tinted backgrounds */
+  --color-highlight: #f6e7b5; /* "marker" highlight in mockups */
+
+  --radius-card: 1.25rem;
+  --shadow-card: 0 1px 2px rgb(31 29 26 / 0.04), 0 8px 24px -12px rgb(31 29 26 / 0.12);
+  --shadow-float: 0 2px 4px rgb(31 29 26 / 0.05), 0 24px 48px -20px rgb(31 29 26 / 0.25);
+}
+
+.dark {
+  --color-paper: #14130f;
+  --color-paper-raised: #1d1b16;
+  --color-paper-sunk: #191813;
+  --color-ink: #ede8dd;
+  --color-ink-muted: #a8a196;
+  --color-line: #2e2b24;
+  --color-accent: #6fbf9c;
+  --color-accent-hover: #86cfae;
+  --color-on-accent: #0e1f18;
+  --color-accent-ink: #7fcaa8;
+  --color-accent-soft: #1c2c25;
+  --color-highlight: #4a3f1c;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  --shadow-float: 0 2px 4px rgb(0 0 0 / 0.3), 0 24px 48px -20px rgb(0 0 0 / 0.7);
+}
+
 html,
 body,
 #root {
@@ -111,4 +152,57 @@ mark.user-hl.has-comment::after {
 @keyframes blink {
   0%, 80%, 100% { opacity: 0.2; }
   40% { opacity: 1; }
+}
+
+/* ---------- Landing page ---------- */
+.landing {
+  font-family: var(--font-body);
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+.landing ::selection {
+  background: var(--color-highlight);
+}
+/* scroll-reveal: content is visible without JS or with reduced motion */
+.reveal {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .js .reveal {
+    opacity: 0;
+    transform: translateY(18px);
+    transition:
+      opacity 0.7s ease,
+      transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .js .reveal.reveal-in {
+    opacity: 1;
+    transform: none;
+  }
+  .caret {
+    animation: caret-blink 1s steps(1) infinite;
+  }
+  .float-slow {
+    animation: float-slow 7s ease-in-out infinite;
+  }
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.35s;
+  }
+}
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes float-slow {
+  50% {
+    transform: translateY(-8px);
+  }
+}
+/* Sections below the first screen are laid out only as they come near (much less work on phones). */
+.landing main > section:not(:first-child),
+.landing footer {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 900px;
 }

@@ -1,0 +1,4 @@
+# The public pages (landing, privacy, terms) may be indexed; everything else needs an account.
+User-agent: *
+Allow: /
+Disallow: /api/

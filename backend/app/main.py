@@ -9,6 +9,7 @@ from pathlib import Path
 import psycopg
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, text, update
@@ -130,6 +131,9 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-TTS-Voice", "X-TTS-Note", "X-TTS-Cache"],
 )
+# Compresses the app's scripts, styles and JSON. Streamed answers (text/event-stream), audio and
+# zip downloads are left alone (Starlette's defaults), so chat still streams word by word.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats, tts):
     app.include_router(module.router)
 
@@ -232,7 +236,16 @@ async def https_ca_certificate():
 _DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 if (_DIST / "index.html").is_file():
-    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+    class _HashedAssets(StaticFiles):
+        """Vite names these files after their content, so a browser may keep them for a year."""
+
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            if response.status_code == 200:
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return response
+
+    app.mount("/assets", _HashedAssets(directory=_DIST / "assets"), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     async def web_app(path: str):

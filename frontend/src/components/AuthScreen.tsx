@@ -133,7 +133,7 @@ function SignUp({ onSignedIn, minLength }: { onSignedIn: (u: User) => void; minL
       </button>
       <p className="text-center text-sm text-stone-500">
         Already have an account?{" "}
-        <a href="#/" className="font-medium text-brand-600 hover:underline dark:text-brand-400">
+        <a href="#/login" className="font-medium text-brand-600 hover:underline dark:text-brand-400">
           Sign in
         </a>
       </p>
@@ -157,7 +157,7 @@ function CheckEmail({ email }: { email: string }) {
           Didn't get it? Send it again
         </button>
       </form>
-      <a href="#/" className="block text-sm text-stone-500 hover:underline">
+      <a href="#/login" className="block text-sm text-stone-500 hover:underline">
         Back to sign in
       </a>
     </div>
@@ -185,7 +185,7 @@ function Forgot() {
           </button>
         </>
       )}
-      <a href="#/" className="block text-center text-sm text-stone-500 hover:underline">
+      <a href="#/login" className="block text-center text-sm text-stone-500 hover:underline">
         Back to sign in
       </a>
     </form>
@@ -201,7 +201,7 @@ function Reset({ token, minLength }: { token: string; minLength: number }) {
     return (
       <div className="space-y-4">
         <Alert kind="ok">Your password has been changed and every device was signed out. Sign in with your new password.</Alert>
-        <a href="#/" className={primary}>
+        <a href="#/login" className={primary}>
           Sign in
         </a>
       </div>
@@ -293,7 +293,7 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: (u: User) => vo
       case "reset":
         return <Reset token={token} minLength={minLength} />;
       case "verify":
-        return <VerifyEmail token={token} onDone={() => (window.location.hash = "#/")} />;
+        return <VerifyEmail token={token} onDone={() => (window.location.hash = "#/login")} />;
       default:
         return <SignIn onSignedIn={onSignedIn} />;
     }
@@ -303,12 +303,12 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: (u: User) => vo
     <div className="flex min-h-full flex-col bg-stone-50 lg:flex-row dark:bg-stone-950">
       <section className="flex flex-col justify-center bg-gradient-to-br from-brand-700 to-brand-900 px-6 py-6 text-white sm:px-12 sm:py-10 lg:w-1/2 lg:py-16">
         <div className="mx-auto w-full max-w-lg">
-          <div className="flex items-center gap-2">
+          <a href="#/" className="flex w-fit items-center gap-2 rounded-lg focus-visible:outline-2 focus-visible:outline-white" title="BookMind home">
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15">
               <BookOpen size={20} />
             </span>
             <span className="text-xl font-semibold tracking-tight">BookMind</span>
-          </div>
+          </a>
           <h1 className="mt-4 font-serif text-2xl leading-tight sm:mt-8 sm:text-4xl">Talk with your books.</h1>
           <p className="mt-2 text-sm text-brand-100 sm:mt-3 sm:text-base">Upload a PDF, EPUB or document, or pick a free classic, and ask it anything.</p>
           <ul className="mt-8 hidden space-y-5 sm:block">

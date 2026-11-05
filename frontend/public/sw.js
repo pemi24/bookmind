@@ -1,7 +1,7 @@
 // BookMind service worker: makes the app installable and quick to open on a phone.
 // Only the app itself (HTML, scripts, styles, icons) is cached. /api requests always go to
 // the backend, so books, notes and answers are never stale.
-const CACHE = "bookmind-shell-v1";
+const CACHE = "bookmind-shell-v2"; // bump when icons change (they are cached first)
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
