@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.verses import chapter_verses
 from app.auth import scope
 from app.auth.deps import CurrentUser, current_user
 from app.config import get_settings
@@ -246,7 +247,9 @@ async def reset_reading(user: CurrentUser, book_id: int, db: AsyncSession = Depe
 async def get_chapter(user: CurrentUser, chapter_id: int, db: AsyncSession = Depends(get_db)):
     ch = await scope.chapter(db, chapter_id, user)
     return {"id": ch.id, "book_id": ch.book_id, "position": ch.position, "title": ch.title,
-            "text": ch.text, "page_map": ch.page_map, "start_page": ch.start_page, "end_page": ch.end_page}
+            "text": ch.text, "page_map": ch.page_map, "start_page": ch.start_page, "end_page": ch.end_page,
+            "section": ch.section, "number": ch.number,
+            "verses": await chapter_verses(db, ch.id) if ch.number is not None else []}
 
 
 @router.get("/books/{book_id}/search")

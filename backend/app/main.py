@@ -16,7 +16,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
 from app.auth.deps import current_user
-from app.api import account, admin, auth, books, catalog, chat, features, library, notes, stats, study, tts
+from app.api import account, admin, auth, books, catalog, chat, features, library, notes, stats, study, tts, verses
 from app.tts import cache as audio_cache
 from app.tts import get_registry
 from app.config import get_settings
@@ -134,7 +134,7 @@ app.add_middleware(
 # Compresses the app's scripts, styles and JSON. Streamed answers (text/event-stream), audio and
 # zip downloads are left alone (Starlette's defaults), so chat still streams word by word.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats, tts):
+for module in (auth, account, admin, books, chat, features, study, notes, catalog, library, stats, tts, verses):
     app.include_router(module.router)
 
 

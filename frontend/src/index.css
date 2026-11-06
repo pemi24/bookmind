@@ -113,6 +113,11 @@ mark.tts-hl {
   @apply rounded-sm bg-emerald-200/75 text-inherit dark:bg-emerald-500/35;
 }
 
+/* Reader: the verse chosen in the verse navigator */
+mark.verse-hl {
+  @apply rounded-sm bg-brand-100 text-inherit dark:bg-brand-500/30 dark:text-brand-50;
+}
+
 /* Reader highlight */
 mark.cite-hl {
   @apply rounded-sm bg-amber-200/80 px-0.5 text-inherit dark:bg-amber-400/35 dark:text-amber-50;

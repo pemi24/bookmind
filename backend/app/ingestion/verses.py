@@ -549,3 +549,86 @@ def verse_label(title: str, start: int | None, end: int | None) -> str:
     if start is None:
         return title
     return f"{title}:{start}" + (f"–{end}" if end and end != start else "")
+
+
+# ---------- references: "John 3:16", "Gen 1:3", "1 Cor 13:4-7", "Ps 23", "3:16" ----------
+
+
+@dataclass
+class Reference:
+    book: str | None  # as typed ("gen", "1 cor"); None for "3:16" (the book on screen)
+    chapter: int | None  # None for a book alone ("Jude")
+    verse: int | None = None
+    verse_end: int | None = None
+
+
+_REF = re.compile(
+    r"^(?P<book>.*?)\s*(?P<ch>\d{1,3})(?:\s*[:.,]\s*(?P<v>\d{1,3})(?:\s*[-–—]\s*(?P<ve>\d{1,3}))?|\s+(?P<v2>\d{1,3}))?$"
+)
+_LEADING_ORDINAL = re.compile(r"^(?:(1st|first|i)|(2nd|second|ii)|(3rd|third|iii))\s+(?=[a-z])")
+
+
+def _norm_book(text: str) -> str:
+    """ "1st John", "First John", "I John", "1John", "1 jn." -> "1 john", "1 jn"."""
+    t = re.sub(r"[.]", " ", text.lower())
+    t = re.sub(r"\s+", " ", t).strip()
+    m = _LEADING_ORDINAL.match(t)
+    if m:
+        num = "1" if m.group(1) else "2" if m.group(2) else "3"
+        t = f"{num} {t[m.end():]}"
+    return re.sub(r"^([123])\s*(?=[a-z])", r"\1 ", t)
+
+
+def parse_reference(text: str) -> Reference | None:
+    """A typed reference, or None if it doesn't look like one. The book name is kept as typed; see
+    resolve_book() for matching it to the book's own sections."""
+    t = re.sub(r"\s+", " ", text.strip())
+    if not t or len(t) > 80:
+        return None
+    m = _REF.match(t)
+    if m:
+        book = m.group("book").strip(" ,")
+        verse = m.group("v") or m.group("v2")
+        if book and not re.search(r"[a-zA-Z]", book):
+            return None  # "1 2 3"
+        if not book and not m.group("v"):
+            return None  # a bare number is not a reference
+        end = int(m.group("ve")) if m.group("ve") else None
+        ref = Reference(book or None, int(m.group("ch")), int(verse) if verse else None, end)
+        if ref.verse_end is not None and ref.verse is not None and ref.verse_end <= ref.verse:
+            ref.verse_end = None
+        return ref
+    if re.fullmatch(r"[123]?\s?[a-zA-Z][a-zA-Z .']{1,40}", t):
+        return Reference(t, None)  # a book alone: "Jude", "Psalms"
+    return None
+
+
+_LOOKUP: dict[str, str] = {}
+for _book in BIBLE_BOOKS:
+    _LOOKUP[_book.name.lower()] = _book.name
+    for _abbr in _book.abbreviations:
+        _LOOKUP.setdefault(_abbr, _book.name)
+for _alias, _name in _ALIASES.items():
+    _LOOKUP.setdefault(_alias, _name)
+_LOOKUP.update({"psalm": "Psalms", "song of songs": "Song of Solomon", "canticle of canticles": "Song of Solomon"})
+
+
+def resolve_book(typed: str, sections: list[str]) -> str | None:
+    """Which of this book's sections a typed name means: its own name ("Esther Additions"), a Bible
+    book's name or abbreviation ("Gen", "1 Cor", "Psalm"), or the start of a name ("Deut", "Matt")."""
+    t = _norm_book(typed)
+    if not t:
+        return None
+    own = {_norm_book(s): s for s in sections}
+    if t in own:
+        return own[t]
+    canonical = _LOOKUP.get(t) or _LOOKUP.get(t.replace(" ", ""))
+    if canonical and canonical in sections:
+        return canonical
+    starts = [s for n, s in own.items() if n.startswith(t)] or [s for n, s in own.items() if n.replace(" ", "").startswith(t.replace(" ", ""))]
+    if len(starts) == 1:
+        return starts[0]
+    if starts:  # "Jo" -> Job, Joel, John, Jonah, Joshua: the shortest name ("Job") is a guess, so don't
+        exact_word = [s for s in starts if _norm_book(s).split(" ")[-1] == t.split(" ")[-1]]
+        return exact_word[0] if len(exact_word) == 1 else None
+    return None

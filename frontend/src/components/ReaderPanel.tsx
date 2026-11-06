@@ -1,23 +1,25 @@
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Languages, Loader2, Maximize2, Minimize2, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Languages, Link2, Loader2, Maximize2, Minimize2, Play, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { ChapterInfo, ChapterText, HighlightColor, Note, Reading, SearchHit, TranslationState } from "../types";
+import type { ChapterInfo, ChapterText, HighlightColor, Note, Reading, SearchHit, TranslationState, VerseInfo } from "../types";
 import { useBookPlayer } from "../audio/useBookPlayer";
 import { findLoose, loadPref, savePref } from "../utils";
 import { useWorkspace } from "../workspace";
 import ListenBar from "./ListenBar";
+import VerseNavigator from "./VerseNavigator";
 import { buttonClasses } from "./ui";
 
 export interface ReaderTarget {
-  chapterId: number;
+  chapterId?: number;
   highlight?: { start: number; end: number };
+  ref?: string; // books with verses: a reference to look up ("John 3:16"), from a link
   nonce: number; // forces re-scroll when the same passage is clicked again
 }
 
 interface Range {
   start: number;
   end: number;
-  kind: "cite" | "search" | "search-active" | "user" | "tts"; // tts: only where CSS highlights aren't supported
+  kind: "cite" | "search" | "search-active" | "user" | "tts" | "verse"; // tts: only where CSS highlights aren't supported
   color?: HighlightColor;
   noteId?: number;
   comment?: string | null;
@@ -45,8 +47,9 @@ const LANGUAGES = [
  * Render chapter text as paragraphs, wrapping highlight ranges in <mark> and inserting
  * page markers at page boundaries. Offsets are character offsets into chapter.text.
  */
-function renderChapter(text: string, ranges: Range[], pageMap: [number, number][], translation?: string[]) {
+function renderChapter(text: string, ranges: Range[], pageMap: [number, number][], translation?: string[], verses?: VerseInfo[]) {
   const marks = pageMap.filter(([o]) => o > 0);
+  const verseAt = new Map((verses ?? []).map((v) => [v.start, v]));
   const out: JSX.Element[] = [];
   let offset = 0;
   text.split("\n\n").forEach((para, pi) => {
@@ -82,6 +85,7 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
       const seg = para.slice(a - pStart, b - pStart);
       const cover = inPara.filter((r) => r.start <= a && r.end >= b);
       const cite = cover.find((r) => r.kind === "cite");
+      const verse = cover.find((r) => r.kind === "verse");
       const active = cover.find((r) => r.kind === "search-active");
       const search = cover.find((r) => r.kind === "search");
       const user = cover.filter((r) => r.kind === "user").pop(); // newest wins where highlights overlap
@@ -103,6 +107,12 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
             {seg}
           </mark>,
         );
+      } else if (verse) {
+        children.push(
+          <mark key={a} className="verse-hl" data-target={a === Math.max(verse.start, pStart) && verse.start >= pStart ? "verse" : undefined}>
+            {seg}
+          </mark>,
+        );
       } else if (user) {
         children.push(
           <mark
@@ -118,8 +128,19 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
         children.push(seg);
       }
     }
+    // Books with verses: each verse is a paragraph, numbered (the number isn't part of the text).
+    const v = verseAt.get(pStart);
     const original = (
-      <p key={pi} data-p={pStart} className="my-[0.9em]">
+      <p key={pi} data-p={pStart} className={v?.kind === "title" ? "my-[0.9em] text-[0.92em] text-stone-500 italic dark:text-stone-400" : "my-[0.9em]"}>
+        {v?.kind === "verse" && (
+          <sup
+            data-verse-num={v.number}
+            className="mr-1 cursor-pointer font-sans text-[0.62em] font-semibold text-brand-600 select-none hover:underline dark:text-brand-300"
+            title={`Verse ${v.number}${v.end ? `–${v.end}` : ""}`}
+          >
+            {v.end ? `${v.number}–${v.end}` : v.number}
+          </sup>
+        )}
         {children}
       </p>
     );
@@ -143,12 +164,12 @@ function renderChapter(text: string, ranges: Range[], pageMap: [number, number][
 // The CSS Custom Highlight API paints the sentence being read without re-rendering the chapter.
 const CAN_HIGHLIGHT = typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
 
-/** A DOM range over chapter text [start, end) inside the paragraph starting at `p` (page markers skipped). */
+/** A DOM range over chapter text [start, end) inside the paragraph starting at `p` (page markers and verse numbers skipped). */
 function textRange(root: HTMLElement, p: number, start: number, end: number): globalThis.Range | null {
   const para = root.querySelector<HTMLElement>(`p[data-p="${p}"]`);
   if (!para) return null;
   const walker = document.createTreeWalker(para, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.parentElement?.closest("[data-page]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    acceptNode: (n) => (n.parentElement?.closest("[data-page], [data-verse-num]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   });
   const range = document.createRange();
   let pos = p;
@@ -223,6 +244,8 @@ export default function ReaderPanel({
   const [translateTo, setTranslateTo] = useState<string | null>(null);
   const [langPicker, setLangPicker] = useState(false);
   const [translation, setTranslation] = useState<TranslationState | null>(null);
+  // Books with verses: the verse chosen in the navigator ("first"/"last" until its chapter loads).
+  const [verseSel, setVerseSel] = useState<{ chapterId: number; number: number | "first" | "last"; span?: { start: number; end: number } } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { book, user, onUser } = useWorkspace();
   const [follow, setFollow] = useState(() => loadPref("reader:tts-follow", true));
@@ -298,15 +321,29 @@ export default function ReaderPanel({
   }, [bookId]);
 
   useEffect(() => {
-    if (target) {
-      void flush();
-      byUser.current = false;
-      resumeRef.current = null;
+    if (!target) return;
+    void flush();
+    byUser.current = false;
+    resumeRef.current = null;
+    setHits(null);
+    if (target.chapterId) {
+      setVerseSel(null);
       setChapterId(target.chapterId);
-      setHits(null);
       setScrollNonce((n) => n + 1);
     }
-  }, [target, flush]);
+    if (target.ref) {
+      // A link to a verse (#/book/1/read?ref=John+3:16): find it, then show it like a cited passage.
+      api
+        .lookupVerse(bookId, target.ref)
+        .then((hit) => {
+          setChapterId(hit.chapter_id);
+          setVerseSel(hit.verse !== null && hit.start !== null && hit.end !== null ? { chapterId: hit.chapter_id, number: hit.verse, span: { start: hit.start, end: hit.end } } : null);
+          setScrollNonce((n) => n + 1);
+        })
+        .catch((e) => notify?.((e as Error).message));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, flush, bookId]);
 
   useEffect(() => {
     if (!chapterId) return;
@@ -354,6 +391,17 @@ export default function ReaderPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter]);
 
+  // The chosen verse in the chapter on screen: its number(s) and where it is in the text.
+  const verseList = useMemo(() => (chapter?.verses ?? []).filter((v) => v.kind === "verse"), [chapter]);
+  const selectedVerse = useMemo(() => {
+    if (!chapter || !verseSel || verseSel.chapterId !== chapter.id || !verseList.length) return null;
+    const n = verseSel.number;
+    const v = n === "first" ? verseList[0] : n === "last" ? verseList[verseList.length - 1] : verseList.find((x) => x.number <= n && n <= (x.end ?? x.number));
+    if (!v) return null;
+    const span = typeof n === "number" ? verseSel.span : undefined;
+    return { verse: v, index: verseList.indexOf(v), start: span?.start ?? v.start, end: span?.end ?? v.stop };
+  }, [chapter, verseSel, verseList]);
+
   const ranges = useMemo<Range[]>(() => {
     if (!chapter) return [];
     const r: Range[] = [];
@@ -364,6 +412,7 @@ export default function ReaderPanel({
       }
     }
     if (target?.highlight && target.chapterId === chapter.id) r.push({ ...target.highlight, kind: "cite" });
+    if (selectedVerse) r.push({ start: selectedVerse.start, end: selectedVerse.end, kind: "verse" });
     if (hits) {
       hits.forEach((h, i) => {
         if (h.chapter_id === chapter.id) r.push({ start: h.start, end: h.end, kind: i === active ? "search-active" : "search" });
@@ -371,11 +420,11 @@ export default function ReaderPanel({
     }
     if (!CAN_HIGHLIGHT && reading && reading.chapterId === chapter.id) r.push({ start: reading.start, end: reading.end, kind: "tts" });
     return r;
-  }, [chapter, highlights, target, hits, active, reading]);
+  }, [chapter, highlights, target, hits, active, reading, selectedVerse]);
 
   const shownTranslation = translation?.status === "done" ? translation.paragraphs : undefined;
   const body = useMemo(
-    () => (chapter ? renderChapter(chapter.text, ranges, chapter.page_map, shownTranslation) : null),
+    () => (chapter ? renderChapter(chapter.text, ranges, chapter.page_map, shownTranslation, chapter.verses) : null),
     [chapter, ranges, shownTranslation],
   );
 
@@ -465,7 +514,9 @@ export default function ReaderPanel({
     if (!el || !chapter) return;
     const id = requestAnimationFrame(() => {
       const mark =
-        el.querySelector<HTMLElement>("mark[data-target='search']") ?? el.querySelector<HTMLElement>("mark[data-target='cite']");
+        el.querySelector<HTMLElement>("mark[data-target='search']") ??
+        el.querySelector<HTMLElement>("mark[data-target='cite']") ??
+        el.querySelector<HTMLElement>("mark[data-target='verse']");
       if (!mark) {
         const r = resumeRef.current;
         resumeRef.current = null;
@@ -482,7 +533,8 @@ export default function ReaderPanel({
       el.scrollTo({ top, behavior: Math.abs(top - el.scrollTop) < 1500 ? "smooth" : "auto" });
     });
     return () => cancelAnimationFrame(id);
-  }, [chapter, scrollNonce]);
+    // (selectedVerse: "first"/"last" become a verse only once their chapter has loaded)
+  }, [chapter, scrollNonce, selectedVerse?.start]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -669,31 +721,67 @@ export default function ReaderPanel({
     });
     byUser.current = true;
     resumeRef.current = null;
+    setVerseSel(null);
     setChapterId(id);
     setScrollNonce((n) => n + 1);
   };
+  /** Books with verses: show a verse (the reader's own navigation, like choosing a chapter). */
+  const goVerse = (id: number, number: number | "first" | "last", span?: { start: number; end: number }) => {
+    if (id !== chapterId) goChapter(id);
+    setVerseSel({ chapterId: id, number, span });
+    setScrollNonce((n) => n + 1);
+  };
+  const stepVerse = (d: 1 | -1) => {
+    if (!selectedVerse || !chapter) return;
+    const to = verseList[selectedVerse.index + d];
+    if (to) return goVerse(chapter.id, to.number);
+    const other = d > 0 ? next : prev;
+    if (other?.number != null) goVerse(other.id, d > 0 ? "first" : "last");
+  };
+  const verseLabel = selectedVerse && chapter ? `${chapter.title}:${selectedVerse.verse.number}${selectedVerse.verse.end ? `–${selectedVerse.verse.end}` : ""}` : null;
+  const copyVerseLink = async () => {
+    if (!verseLabel) return;
+    const url = `${window.location.origin}${window.location.pathname}#/book/${bookId}/read?ref=${encodeURIComponent(verseLabel.replace("–", "-"))}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      notify?.(`Link to ${verseLabel} copied.`);
+    } catch {
+      notify?.(url);
+    }
+  };
+  const hasVerses = chapters.some((c) => c.section);
   const iconBtn = "rounded-md p-1.5 text-stone-500 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-800";
   const bookFraction = chapters.length && idx >= 0 ? (idx + fraction) / chapters.length : 0;
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900">
-      {/* Chapter navigation */}
-      <div className="flex items-center gap-1 border-b border-stone-200 px-2 py-1.5 dark:border-stone-800">
+      {/* Chapter navigation (positioned: the verse navigator's panel opens across it) */}
+      <div className="relative flex items-center gap-1 border-b border-stone-200 px-2 py-1.5 dark:border-stone-800">
         <button disabled={!prev} onClick={() => prev && goChapter(prev.id)} className={iconBtn} title="Previous chapter">
           <ChevronLeft size={18} />
         </button>
-        <select
-          value={chapterId ?? ""}
-          onChange={(e) => goChapter(Number(e.target.value))}
-          className="min-w-0 flex-1 truncate rounded-md border border-stone-200 bg-transparent px-2 py-1 text-sm dark:border-stone-700"
-          aria-label="Chapter"
-        >
-          {chapters.map((c) => (
-            <option key={c.id} value={c.id} className="dark:bg-stone-900">
-              {c.position}. {c.title}
-            </option>
-          ))}
-        </select>
+        {hasVerses ? (
+          <VerseNavigator
+            bookId={bookId}
+            chapters={chapters}
+            current={chapters.find((c) => c.id === chapterId) ?? null}
+            onChapter={(id) => goChapter(id)}
+            onVerse={(id, n, span) => goVerse(id, n, span)}
+          />
+        ) : (
+          <select
+            value={chapterId ?? ""}
+            onChange={(e) => goChapter(Number(e.target.value))}
+            className="min-w-0 flex-1 truncate rounded-md border border-stone-200 bg-transparent px-2 py-1 text-sm dark:border-stone-700"
+            aria-label="Chapter"
+          >
+            {chapters.map((c) => (
+              <option key={c.id} value={c.id} className="dark:bg-stone-900">
+                {c.position}. {c.title}
+              </option>
+            ))}
+          </select>
+        )}
         <button disabled={!next} onClick={() => next && goChapter(next.id)} className={iconBtn} title="Next chapter">
           <ChevronRight size={18} />
         </button>
@@ -755,6 +843,36 @@ export default function ReaderPanel({
       <div className="h-0.5 bg-stone-100 dark:bg-stone-800" title={`${Math.round(bookFraction * 100)}% through the book`}>
         <div className="h-full bg-brand-500 transition-[width]" style={{ width: `${bookFraction * 100}%` }} />
       </div>
+
+      {selectedVerse && verseLabel && (
+        <div className="flex items-center gap-1 border-b border-stone-200 bg-brand-50/60 px-2 py-1 text-sm dark:border-stone-800 dark:bg-brand-900/25" aria-label="Chosen verse">
+          <button onClick={() => stepVerse(-1)} disabled={selectedVerse.index === 0 && prev?.number == null} className={iconBtn} title="Previous verse" aria-label="Previous verse">
+            <ChevronLeft size={16} />
+          </button>
+          <span className="min-w-0 truncate font-medium text-brand-800 tabular-nums dark:text-brand-200" aria-live="polite">
+            {verseLabel}
+          </span>
+          <button
+            onClick={() => stepVerse(1)}
+            disabled={selectedVerse.index === verseList.length - 1 && next?.number == null}
+            className={iconBtn}
+            title="Next verse"
+            aria-label="Next verse"
+          >
+            <ChevronRight size={16} />
+          </button>
+          <span className="flex-1" />
+          <button onClick={() => readHere(selectedVerse.start)} className={`${iconBtn} flex items-center gap-1 text-xs`} title="Read aloud from this verse">
+            <Play size={14} /> <span className="hidden sm:inline">Read from here</span>
+          </button>
+          <button onClick={copyVerseLink} className={iconBtn} title="Copy a link to this verse" aria-label="Copy a link to this verse">
+            <Link2 size={15} />
+          </button>
+          <button onClick={() => setVerseSel(null)} className={iconBtn} title="Clear" aria-label="Clear the chosen verse">
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       {translateTo && translation && translation.status !== "done" && (
         <div className="flex items-center gap-2 border-b border-stone-200 bg-brand-50 px-3 py-1.5 text-xs text-brand-800 dark:border-stone-800 dark:bg-brand-950/40 dark:text-brand-200">
@@ -856,6 +974,8 @@ export default function ReaderPanel({
           setShowHits(false);
           const t = e.target as HTMLElement;
           if (t.closest("[data-reader-ui]")) return;
+          const num = t.closest<HTMLElement>("[data-verse-num]");
+          if (num && chapter) return goVerse(chapter.id, Number(num.dataset.verseNum));
           const mark = t.closest<HTMLElement>("mark[data-note]");
           const collapsed = window.getSelection()?.isCollapsed !== false;
           if (mark && collapsed) openHighlight(mark);
@@ -964,7 +1084,7 @@ export default function ReaderPanel({
           {chapter && (
             <>
               <p className="font-sans text-xs tracking-wide text-stone-400 uppercase">
-                Chapter {chapter.position}
+                {chapter.section && chapter.number != null ? `${chapter.section} · Chapter ${chapter.number}` : `Chapter ${chapter.position}`}
                 {chapter.page_map[0] ? ` · page ${chapter.page_map[0][1]}` : ""}
               </p>
               <h2 className="mt-1 mb-4 font-sans text-xl font-semibold">{chapter.title}</h2>

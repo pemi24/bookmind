@@ -65,6 +65,30 @@ export interface ChapterText {
   title: string;
   text: string;
   page_map: [number, number][];
+  section?: string | null; // books with verses: "Genesis"
+  number?: number | null; // chapter number in it
+  verses?: VerseInfo[]; // where each verse is in `text` (empty for ordinary chapters)
+}
+
+/** A verse's place in its chapter's text. kind "title" is a psalm's superscription (number 0). */
+export interface VerseInfo {
+  number: number;
+  end: number | null; // last verse of a range ("3-5")
+  kind: "verse" | "title";
+  start: number;
+  stop: number;
+}
+
+/** Where a typed reference ("John 3:16") is in the book. */
+export interface VerseLookup {
+  chapter_id: number;
+  title: string; // "John 3"
+  section: string;
+  chapter: number;
+  verse: number | null;
+  verse_end: number | null;
+  start: number | null;
+  end: number | null;
 }
 
 export interface Source {

@@ -39,7 +39,7 @@ const Discover = lazy(() => import("./components/Discover"));
 const SettingsPage = lazy(() => import("./components/SettingsPage"));
 const StatsPage = lazy(() => import("./components/StatsPage"));
 
-/* ---------- hash router: #/  ·  #/discover|stats|settings|admin  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e= ---------- */
+/* ---------- hash router: #/  ·  #/discover|stats|settings|admin  ·  #/book/:id[/:tab]  ·  #/book/:id/read?c=&s=&e=  ·  #/book/:id/read?ref=John+3:16 ---------- */
 const TABS = [
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "summaries", label: "Summaries", icon: FileText },
@@ -54,7 +54,7 @@ type Tab = (typeof TABS)[number]["id"];
 
 type Route =
   | { name: "page"; page: Page }
-  | { name: "book"; id: number; tab: Tab; read: boolean; target: PassageLoc | null };
+  | { name: "book"; id: number; tab: Tab; read: boolean; target: PassageLoc | null; ref: string | null };
 
 function parseHash(): Route {
   const page = window.location.hash.match(/^#\/(discover|stats|settings|admin)\/?$/); // anything else (incl. the old #/search) → library
@@ -67,7 +67,10 @@ function parseHash(): Route {
   const q = new URLSearchParams(m[3] ?? "");
   const c = Number(q.get("c"));
   const target = c ? { chapter_id: c, char_start: q.has("s") ? Number(q.get("s")) : undefined, char_end: q.has("e") ? Number(q.get("e")) : undefined } : null;
-  return { name: "book", id: Number(m[1]), tab, read, target };
+  // Books with verses: ?ref=John 3:16, or ?book=John&chapter=3&verse=16 (book optional when there's only one)
+  const chapterNo = q.get("chapter");
+  const ref = q.get("ref") || (chapterNo ? `${q.get("book") ?? ""} ${chapterNo}${q.get("verse") ? `:${q.get("verse")}` : ""}`.trim() : null);
+  return { name: "book", id: Number(m[1]), tab, read, target, ref };
 }
 
 function useRoute(): [Route, (hash: string) => void] {
@@ -258,14 +261,17 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
   }, [bookId]);
   // Deep links (#/book/1/read?c=..&s=..&e=..) open the reader at that passage.
   const routeTarget = route.name === "book" ? route.target : null;
-  const routeTargetKey = routeTarget ? `${routeTarget.chapter_id}:${routeTarget.char_start}:${routeTarget.char_end}` : "";
+  const routeRef = route.name === "book" ? route.ref : null;
+  const routeTargetKey = routeTarget ? `${routeTarget.chapter_id}:${routeTarget.char_start}:${routeTarget.char_end}` : routeRef ?? "";
   useEffect(() => {
     if (readMode) {
       setReader((r) => ({
         open: true,
         target: routeTarget
           ? { chapterId: routeTarget.chapter_id, highlight: routeTarget.char_start !== undefined && routeTarget.char_end !== undefined ? { start: routeTarget.char_start, end: routeTarget.char_end } : undefined, nonce: Date.now() }
-          : r.target,
+          : routeRef
+            ? { ref: routeRef, nonce: Date.now() }
+            : r.target,
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -6,6 +6,7 @@ import type {
   CatalogSourceStatus,
   ChapterInfo,
   ChapterText,
+  VerseLookup,
   ChatMessage,
   ConversationSummary,
   Entity,
@@ -263,6 +264,9 @@ export const api = {
     request<{ ok: boolean }>(`/api/books/${id}/verse-mode`, { method: "PUT", body: JSON.stringify({ detect }) }),
   chapters: (id: number) => request<ChapterInfo[]>(`/api/books/${id}/chapters`),
   chapter: (id: number) => request<ChapterText>(`/api/chapters/${id}`),
+  /** Find "John 3:16", "Gen 1:3" or "3:16" (in the book of `fromChapter`) in a book with verses. */
+  lookupVerse: (bookId: number, ref: string, fromChapter?: number) =>
+    request<VerseLookup>(`/api/books/${bookId}/verses/lookup?ref=${encodeURIComponent(ref)}${fromChapter ? `&from_chapter=${fromChapter}` : ""}`),
   search: (bookId: number, q: string) =>
     request<{ query: string; total: number; results: SearchHit[] }>(
       `/api/books/${bookId}/search?q=${encodeURIComponent(q)}`,
