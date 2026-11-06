@@ -30,7 +30,7 @@ import TimelinePanel from "./components/panels/TimelinePanel";
 import ReaderPanel, { type ReaderTarget } from "./components/ReaderPanel";
 import Sidebar, { type Page } from "./components/Sidebar";
 import type { Book, ChapterInfo, Health, NewNote, PassageLoc, Reading, Source, User } from "./types";
-import { applyTheme, isIndexing, loadPref, savePref, spoilerLimit, type Spoiler } from "./utils";
+import { applyTheme, isIndexing, loadPref, savePref, spoilerLimit, verseCounts, type Spoiler } from "./utils";
 import { WorkspaceContext, type Workspace } from "./workspace";
 
 // Pages away from the library and the book load on first visit, keeping the first download small.
@@ -298,9 +298,9 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
     }
   };
 
-  const reindex = async (id: number) => {
+  const reindex = async (id: number, verses?: boolean) => {
     try {
-      await api.reindex(id);
+      await (verses === undefined ? api.reindex(id) : api.setVerseMode(id, verses));
       setBooks((bs) => bs.map((b) => (b.id === id ? { ...b, status: "pending", progress: 0, error: null, status_message: "Queued" } : b)));
       if (id === bookId) setReader({ open: false, target: null });
     } catch (e) {
@@ -437,6 +437,7 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
                   onOpen={(id) => navigate(`#/book/${id}`)}
                   onRead={(id) => navigate(`#/book/${id}/read`)}
                   onReindex={reindex}
+                  onVerseMode={(id, on) => reindex(id, on)}
                   onDelete={remove}
                   onResetReading={resetReading}
                   onOpenPassage={openPassage}
@@ -462,7 +463,7 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
               <div className="min-w-0 flex-1">
                 <h1 className="truncate font-semibold">{book.title}</h1>
                 <p className="truncate text-xs text-stone-500">
-                  {[book.author, book.chapter_count ? `${book.chapter_count} chapters` : null, book.page_count ? `${book.page_count}${book.pages_estimated ? " est." : ""} pages` : null]
+                  {[book.author, book.verses ? verseCounts(book.verses) : book.chapter_count ? `${book.chapter_count} chapters` : null, book.page_count ? `${book.page_count}${book.pages_estimated ? " est." : ""} pages` : null]
                     .filter(Boolean)
                     .join(" · ")}
                 </p>

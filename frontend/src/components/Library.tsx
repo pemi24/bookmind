@@ -1,7 +1,7 @@
-import { AlertTriangle, BookOpenText, FileUp, Loader2, MessageSquare, MoreVertical, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpenText, FileUp, ListOrdered, Loader2, MessageSquare, MoreVertical, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Book, PassageLoc } from "../types";
-import { coverGradient, formatBytes, formatDate, isIndexing } from "../utils";
+import { coverGradient, formatBytes, formatDate, isIndexing, verseCounts } from "../utils";
 import LibrarySearch from "./LibrarySearch";
 
 const ACCEPT = ".pdf,.epub,.docx,.txt,.md,.markdown";
@@ -31,6 +31,7 @@ function BookCard({
   onOpen,
   onRead,
   onReindex,
+  onVerseMode,
   onDelete,
   onResetReading,
 }: {
@@ -38,6 +39,7 @@ function BookCard({
   onOpen: () => void;
   onRead: () => void;
   onReindex: () => void;
+  onVerseMode: (detect: boolean) => void;
   onDelete: () => void;
   onResetReading: () => void;
 }) {
@@ -53,7 +55,7 @@ function BookCard({
   const busy = isIndexing(book.status);
   const meta = [
     book.page_count ? `${book.page_count}${book.pages_estimated ? " est." : ""} pages` : null,
-    book.chapter_count ? `${book.chapter_count} ch.` : null,
+    book.verses ? verseCounts(book.verses) : book.chapter_count ? `${book.chapter_count} ch.` : null,
     formatBytes(book.file_size),
   ].filter(Boolean);
 
@@ -92,6 +94,14 @@ function BookCard({
               )}
               <button disabled={busy} onClick={() => { setMenu(false); onReindex(); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800">
                 <RefreshCw size={14} /> Re-index
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => { setMenu(false); onVerseMode(!book.verses); }}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800"
+                title={book.verses ? "Re-index as an ordinary book, without chapter and verse numbers" : "Re-index with verse detection: for the Bible, the Quran and other books numbered by chapter and verse"}
+              >
+                <ListOrdered size={14} className="shrink-0" /> {book.verses ? "Turn off verses" : "Detect verses"}
               </button>
               <button disabled={book.status === "processing"} onClick={() => { setMenu(false); onDelete(); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40">
                 <Trash2 size={14} /> Delete
@@ -152,6 +162,7 @@ export default function Library({
   onOpen,
   onRead,
   onReindex,
+  onVerseMode,
   onDelete,
   onResetReading,
   onOpenPassage,
@@ -162,6 +173,7 @@ export default function Library({
   onOpen: (id: number) => void;
   onRead: (id: number) => void;
   onReindex: (id: number) => void;
+  onVerseMode: (id: number, detect: boolean) => void;
   onDelete: (book: Book) => void;
   onResetReading: (book: Book) => void;
 }) {
@@ -240,6 +252,7 @@ export default function Library({
                 onOpen={() => onOpen(b.id)}
                 onRead={() => onRead(b.id)}
                 onReindex={() => onReindex(b.id)}
+                onVerseMode={(on) => onVerseMode(b.id, on)}
                 onDelete={() => onDelete(b)}
                 onResetReading={() => onResetReading(b)}
               />

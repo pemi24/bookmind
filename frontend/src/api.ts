@@ -258,6 +258,9 @@ export const api = {
   },
   deleteBook: (id: number) => request<void>(`/api/books/${id}`, { method: "DELETE" }),
   reindex: (id: number) => request<{ ok: boolean }>(`/api/books/${id}/reindex`, { method: "POST" }),
+  /** Turn chapter-and-verse detection on or off; the book is re-indexed. */
+  setVerseMode: (id: number, detect: boolean) =>
+    request<{ ok: boolean }>(`/api/books/${id}/verse-mode`, { method: "PUT", body: JSON.stringify({ detect }) }),
   chapters: (id: number) => request<ChapterInfo[]>(`/api/books/${id}/chapters`),
   chapter: (id: number) => request<ChapterText>(`/api/chapters/${id}`),
   search: (bookId: number, q: string) =>

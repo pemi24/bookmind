@@ -39,6 +39,8 @@ def book_dict(b: Book, chapter_count: int | None = None) -> dict:
         "chapter_count": chapter_count,
         "reading": reading_dict(b),
         "listening": listening_dict(b),
+        "verse_mode": b.verse_mode,
+        "verses": b.verse_summary,  # {"sections", "chapters", "verses", "summary"}, or None
     }
 
 
@@ -152,6 +154,23 @@ async def reindex_book(user: CurrentUser, book_id: int, db: AsyncSession = Depen
     return {"ok": True}
 
 
+class VerseModeUpdate(BaseModel):
+    detect: bool  # look for chapters and verses when indexing
+
+
+@router.put("/books/{book_id}/verse-mode", status_code=202)
+async def set_verse_mode(user: CurrentUser, book_id: int, req: VerseModeUpdate, db: AsyncSession = Depends(get_db)):
+    """Turn chapter-and-verse detection on or off for a book, and re-index it so the change applies."""
+    book = await get_book_or_404(db, book_id, user)
+    if book.status in ("processing", "pending"):
+        raise HTTPException(409, "This book is already queued or indexing.")
+    book.verse_mode = "auto" if req.detect else "off"
+    book.status, book.progress, book.status_message, book.error = "pending", 0.0, "Queued", None
+    await db.commit()
+    schedule_ingestion(book_id)
+    return {"ok": True}
+
+
 @router.get("/books/{book_id}/progress")
 async def book_progress(user: CurrentUser, book_id: int, request: Request):
     """Server-Sent Events stream of indexing progress until the book is ready/failed."""
@@ -185,10 +204,11 @@ async def list_chapters(user: CurrentUser, book_id: int, db: AsyncSession = Depe
     await get_book_or_404(db, book_id, user)
     rows = (await db.execute(
         select(Chapter.id, Chapter.position, Chapter.title, Chapter.start_page, Chapter.end_page,
-               func.length(Chapter.text))
+               func.length(Chapter.text), Chapter.section, Chapter.number)
         .where(Chapter.book_id == book_id).order_by(Chapter.position)
     )).all()
-    return [{"id": r[0], "position": r[1], "title": r[2], "start_page": r[3], "end_page": r[4], "chars": r[5]}
+    return [{"id": r[0], "position": r[1], "title": r[2], "start_page": r[3], "end_page": r[4], "chars": r[5],
+             "section": r[6], "number": r[7]}
             for r in rows]
 
 

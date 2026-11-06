@@ -41,6 +41,10 @@ class ChapterData:
     title: str
     text: str
     page_map: list[list[int]] = field(default_factory=list)  # [[char_offset, page_number], ...]
+    # Books with verses (see verses.py): "Genesis", 1, and each verse's place in `text`.
+    section: str | None = None
+    number: int | None = None
+    verses: list = field(default_factory=list)  # list[verses.VerseSpan]
 
     @property
     def start_page(self) -> int | None:

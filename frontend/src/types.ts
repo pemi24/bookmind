@@ -21,6 +21,16 @@ export interface Book {
   chapter_count: number | null;
   reading: Reading | null;
   listening: Listening | null; // where read-aloud stopped
+  verse_mode: "auto" | "off"; // look for chapters and verses when indexing
+  verses: VerseSummary | null; // what was found; null when the book has no verse structure
+}
+
+/** A book with chapters and verses (a Bible, the Quran...): what indexing found. */
+export interface VerseSummary {
+  sections: number; // books of the Bible, surahs...
+  chapters: number;
+  verses: number;
+  summary: string; // "Detected 66 books, 1,189 chapters, 31,102 verses"
 }
 
 /** Where the reader stopped. Positions are chapter positions; furthest = furthest chapter actually read. */
@@ -44,6 +54,8 @@ export interface ChapterInfo {
   start_page: number | null;
   end_page: number | null;
   chars: number;
+  section: string | null; // books with verses: "Genesis"
+  number: number | null; // and the chapter number in it
 }
 
 export interface ChapterText {

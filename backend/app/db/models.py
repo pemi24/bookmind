@@ -135,6 +135,10 @@ class Book(Base):
     listen_position: Mapped[int | None] = mapped_column(Integer)  # chapter position
     listen_offset: Mapped[int | None] = mapped_column(Integer)  # char offset of the sentence
     listen_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Chapter-and-verse structure (scriptures): "auto" detects it when indexing, "off" never does.
+    verse_mode: Mapped[str] = mapped_column(String(10), default="auto", server_default="auto")
+    # What was detected: {"sections", "chapters", "verses", "summary"}; None when the book has no verses.
+    verse_summary: Mapped[dict | None] = mapped_column(JSONB)
 
     chapters: Mapped[list[Chapter]] = relationship(
         back_populates="book", order_by="Chapter.position", passive_deletes=True
@@ -153,6 +157,9 @@ class Chapter(Base):
     page_map: Mapped[list] = mapped_column(JSONB, default=list)
     start_page: Mapped[int | None] = mapped_column(Integer)
     end_page: Mapped[int | None] = mapped_column(Integer)
+    # Books with verses: one row per scripture chapter, e.g. section "Genesis", number 1.
+    section: Mapped[str | None] = mapped_column(String(200))
+    number: Mapped[int | None] = mapped_column(Integer)
 
     book: Mapped[Book] = relationship(back_populates="chapters")
     __table_args__ = (Index("ix_chapters_book_position", "book_id", "position"),)
@@ -173,6 +180,9 @@ class Chunk(Base):
     page_start: Mapped[int | None] = mapped_column(Integer)
     page_end: Mapped[int | None] = mapped_column(Integer)
     token_count: Mapped[int] = mapped_column(Integer)
+    # Books with verses: the verses the passage covers, in its chapter ("Genesis 1:3-5": 3 and 5).
+    verse_start: Mapped[int | None] = mapped_column(Integer)
+    verse_end: Mapped[int | None] = mapped_column(Integer)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
     tsv = mapped_column(TSVECTOR, Computed("to_tsvector('english', text)", persisted=True))
 
@@ -188,6 +198,27 @@ class Chunk(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
+
+
+class Verse(Base):
+    """One verse (or a chapter's title, such as a psalm's superscription) of a book with verses."""
+
+    __tablename__ = "verses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = _book_fk()
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"))
+    chapter_number: Mapped[int] = mapped_column(Integer)
+    number: Mapped[int] = mapped_column(Integer)  # 0 for a chapter title
+    end: Mapped[int | None] = mapped_column(Integer)  # last verse of a range ("3-5")
+    kind: Mapped[str] = mapped_column(String(10), default="verse")  # verse | title
+    position: Mapped[int] = mapped_column(Integer)  # order within the chapter
+    char_start: Mapped[int] = mapped_column(Integer)  # offsets into chapters.text
+    char_end: Mapped[int] = mapped_column(Integer)
+    page: Mapped[int | None] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)  # clean: the reference marker is never part of it
+
+    __table_args__ = (Index("ix_verses_chapter_position", "chapter_id", "position"),)
 
 
 class Conversation(Base):

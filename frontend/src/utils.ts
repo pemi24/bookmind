@@ -98,3 +98,9 @@ export function applyTheme(theme: "system" | "light" | "dark"): void {
     /* storage unavailable */
   }
 }
+
+/** "66 books · 1,189 chapters · 31,102 verses" (a single book or chapter in the singular). */
+export function verseCounts(v: { sections: number; chapters: number; verses: number }): string {
+  const n = (count: number, one: string, many: string) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
+  return [n(v.sections, "book", "books"), n(v.chapters, "chapter", "chapters"), n(v.verses, "verse", "verses")].join(" · ");
+}
