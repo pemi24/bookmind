@@ -130,11 +130,29 @@ describe("resolveVoice", () => {
 
 describe("voicePrefs", () => {
   it("fills in defaults", () => {
-    expect(voicePrefs({ settings: {} } as User)).toEqual({ chatVoice: "", readVoice: "", speed: 1, pitch: 1, volume: 1, autoRead: false });
+    expect(voicePrefs({ settings: {} } as User)).toEqual({
+      chatVoice: "",
+      readVoice: "",
+      speed: 1,
+      pitch: 1,
+      volume: 1,
+      autoRead: false,
+      announceVerses: true, // books with verses: on by default
+      announceChapter: true,
+    });
   });
   it("reads saved settings", () => {
     const user = {
-      settings: { tts_chat_voice: "piper:amy", tts_read_voice: "browser:", tts_speed: 1.5, tts_pitch: 0.8, tts_volume: 0.5, tts_auto_read: true },
+      settings: {
+        tts_chat_voice: "piper:amy",
+        tts_read_voice: "browser:",
+        tts_speed: 1.5,
+        tts_pitch: 0.8,
+        tts_volume: 0.5,
+        tts_auto_read: true,
+        tts_announce_verses: "off",
+        tts_announce_chapter: false,
+      },
     };
     expect(voicePrefs(user as unknown as User)).toEqual({
       chatVoice: "piper:amy",
@@ -143,6 +161,8 @@ describe("voicePrefs", () => {
       pitch: 0.8,
       volume: 0.5,
       autoRead: true,
+      announceVerses: false,
+      announceChapter: false,
     });
   });
 });

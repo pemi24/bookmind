@@ -140,6 +140,8 @@ export interface User {
     tts_pitch?: number; // browser voices only
     tts_volume?: number;
     tts_auto_read?: boolean;
+    tts_announce_verses?: "every" | "off"; // books with verses: "Verse 1" before each verse
+    tts_announce_chapter?: boolean; // and "Genesis, chapter 1" when a chapter starts
   };
   created_at: string | null;
 }

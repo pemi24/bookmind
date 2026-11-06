@@ -12,6 +12,8 @@ export interface VoicePrefs {
   pitch: number;
   volume: number;
   autoRead: boolean;
+  announceVerses: boolean; // books with verses: say "Verse 1" before each verse
+  announceChapter: boolean; // and "Genesis, chapter 1" once when a chapter starts
 }
 
 export function voicePrefs(user: User): VoicePrefs {
@@ -23,6 +25,8 @@ export function voicePrefs(user: User): VoicePrefs {
     pitch: s.tts_pitch ?? 1,
     volume: s.tts_volume ?? 1,
     autoRead: s.tts_auto_read ?? false,
+    announceVerses: (s.tts_announce_verses ?? "every") !== "off",
+    announceChapter: s.tts_announce_chapter ?? true,
   };
 }
 

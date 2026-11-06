@@ -239,6 +239,11 @@ export interface ChapterSentence {
   end: number;
   text: string;
   p: number;
+  /** Books with verses: "chapter" ("Genesis, chapter 1."), "title" (a psalm's superscription),
+   * "verse-number" ("Verse 1.") or "text". start/end then cover the whole verse. */
+  kind?: "chapter" | "title" | "verse-number" | "text";
+  verse?: number | null;
+  verse_end?: number | null;
 }
 
 export const admin = {

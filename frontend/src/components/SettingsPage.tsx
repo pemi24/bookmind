@@ -297,6 +297,8 @@ function Listening({ user, onUser }: { user: User; onUser: (u: User) => void }) 
                 tts_pitch: prefs.pitch,
                 tts_volume: prefs.volume,
                 tts_auto_read: prefs.autoRead,
+                tts_announce_verses: prefs.announceVerses ? "every" : "off",
+                tts_announce_chapter: prefs.announceChapter,
               })
             ).user,
           );
@@ -329,6 +331,28 @@ function Listening({ user, onUser }: { user: User; onUser: (u: User) => void }) 
             <span className="block text-xs text-stone-500">Each answer starts playing as soon as its first sentence is ready.</span>
           </span>
         </label>
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-stone-700 dark:text-stone-300">Books with chapters and verses</legend>
+          <p className="text-xs text-stone-500">The Bible, the Quran and other books numbered by verse. The numbers are never read out as “one colon four”.</p>
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            <span>Announce verse numbers</span>
+            <select
+              value={prefs.announceVerses ? "every" : "off"}
+              onChange={(e) => set({ announceVerses: e.target.value === "every" })}
+              className="rounded-md border border-stone-300 bg-transparent px-2 py-1 text-sm dark:border-stone-700 dark:bg-stone-900"
+            >
+              <option value="every">Every verse (“Verse 1”, then the verse)</option>
+              <option value="off">Off (just the text)</option>
+            </select>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={prefs.announceChapter} onChange={(e) => set({ announceChapter: e.target.checked })} className="mt-0.5 accent-brand-600" />
+            <span>
+              Announce each chapter
+              <span className="block text-xs text-stone-500">“Genesis, chapter 1”, once when the chapter starts.</span>
+            </span>
+          </label>
+        </fieldset>
         {unavailable.length > 0 && (
           <ul className="space-y-0.5 text-xs text-stone-500">
             {unavailable.map((p) => (

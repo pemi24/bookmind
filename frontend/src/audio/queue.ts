@@ -2,6 +2,20 @@ import { tts, TtsUnavailable, type TtsCatalog } from "../api";
 import { claimAudio, extraRate, speakWithBrowser, type Sound } from "./playback";
 import { BROWSER_DEFAULT, canSpeakInBrowser } from "./voices";
 
+/** Resolves after `ms`, or at once when the signal aborts (pause, seek, stop). */
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const t = window.setTimeout(done, ms);
+    function done() {
+      window.clearTimeout(t);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
 export type QueueStatus = "idle" | "loading" | "playing" | "paused" | "ended" | "error";
 
 export interface QueueState {
@@ -24,6 +38,8 @@ export interface QueueOptions {
   onSentence?: (index: number) => void;
   /** Out of sentences: append() more and return true to keep going (the reader's next chapter). */
   onEnd?: () => Promise<boolean> | boolean;
+  /** Silence after a sentence, in milliseconds at normal speed (e.g. after "Genesis, chapter 1"). */
+  pauseAfter?: (index: number) => number;
 }
 
 interface Clip {
@@ -232,6 +248,11 @@ export class SpeechQueue {
         return;
       }
       if (gen !== this.generation) return;
+      const pause = this.opts.pauseAfter?.(i) ?? 0;
+      if (pause > 0) {
+        await wait(pause / Math.max(this.sound.rate, 0.25), ctrl.signal);
+        if (gen !== this.generation) return;
+      }
       this.resumeAt = 0;
       this.dropClip(i - 1); // keep the one just read, for "previous sentence"
       this.index = i + 1;

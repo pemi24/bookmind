@@ -19,12 +19,13 @@ from app.api.books import listening_dict
 from app.auth import ratelimit, scope
 from app.auth.deps import CurrentUser, current_user
 from app.config import get_settings
-from app.db.models import Chapter
+from app.db.models import Chapter, Verse
 from app.db.session import get_db
 from app.tts import Spoken, get_registry
 from app.tts import cache as audio_cache
 from app.tts.base import TTSError
 from app.tts.text import clean_for_speech, split_sentences
+from app.tts.verses import speech_items
 
 router = APIRouter(prefix="/api/tts", tags=["tts"], dependencies=[Depends(current_user)])
 
@@ -114,6 +115,11 @@ async def chapter_sentences(user: CurrentUser, chapter_id: int, db: AsyncSession
     """A chapter as sentences for reading aloud. Offsets point into the chapter's text (the reader
     highlights with them); `p` is the start of the sentence's paragraph (text split on blank lines)."""
     ch = await scope.chapter(db, chapter_id, user)  # 404 for someone else's book
+    if ch.number is not None and ch.section:
+        # A chapter of a book with verses: built from its verses, with chapter and verse announcements.
+        verses = (await db.execute(select(Verse).where(Verse.chapter_id == ch.id).order_by(Verse.position))).scalars().all()
+        return {"chapter_id": ch.id, "position": ch.position, "title": ch.title,
+                "sentences": speech_items(ch.section, ch.number, verses)}
     text = ch.text or ""
     paragraphs, at = [], 0
     for para in text.split("\n\n"):

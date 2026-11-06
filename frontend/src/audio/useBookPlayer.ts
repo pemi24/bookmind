@@ -14,6 +14,33 @@ export interface ReadItem extends ChapterSentence {
 export type SleepTimer = { kind: "off" } | { kind: "time"; until: number } | { kind: "chapter"; chapterId: number };
 
 const SAVE_EVERY_MS = 5000;
+// Books with verses: a short silence after each announcement (ms at normal speed).
+const PAUSE_AFTER: Partial<Record<NonNullable<ChapterSentence["kind"]>, number>> = { chapter: 700, title: 450, "verse-number": 250 };
+
+/** The items to read, without the announcements the listener has turned off. */
+export function withAnnouncements<T extends { kind?: ChapterSentence["kind"] }>(items: T[], opts: { verses: boolean; chapter: boolean }): T[] {
+  return items.filter((s) => (s.kind !== "verse-number" || opts.verses) && (s.kind !== "chapter" || opts.chapter));
+}
+
+/** The item a verse step lands on: the start of the next (d = 1) or previous (d = -1) verse. Items of
+ * one verse share its start; a chapter's announcement goes with its first verse. */
+export function verseStep(list: { chapterId: number; start: number }[], i: number, d: 1 | -1): number {
+  const key = (j: number) => `${list[j].chapterId}:${list[j].start}`;
+  if (!list[i]) return -1;
+  const here = key(i);
+  let start = i;
+  while (start > 0 && key(start - 1) === here) start--;
+  if (d > 0) {
+    let j = i;
+    while (j < list.length && key(j) === here) j++;
+    return j < list.length ? j : -1;
+  }
+  if (start === 0) return 0;
+  const before = key(start - 1);
+  let j = start - 1;
+  while (j > 0 && key(j - 1) === before) j--;
+  return j;
+}
 const APPEND_WHEN_LEFT = 4; // queue the next chapter this many sentences before the end, so it continues without a gap
 
 /**
@@ -63,8 +90,15 @@ export function useBookPlayer({
     return sentences;
   }, []);
 
-  const toItems = (ch: ChapterInfo, sentences: ChapterSentence[]): ReadItem[] =>
-    sentences.map((s) => ({ ...s, chapterId: ch.id, position: ch.position, title: ch.title }));
+  const toItems = (ch: ChapterInfo, sentences: ChapterSentence[]): ReadItem[] => {
+    const { prefs } = live.current;
+    return withAnnouncements(sentences, { verses: prefs.announceVerses, chapter: prefs.announceChapter }).map((s) => ({
+      ...s,
+      chapterId: ch.id,
+      position: ch.position,
+      title: ch.title,
+    }));
+  };
 
   const save = useCallback(
     (item: ReadItem | null, force = false) => {
@@ -120,7 +154,7 @@ export function useBookPlayer({
   /** Start reading at the first sentence that ends after `offset` in a chapter (or, past its last
    * sentence, e.g. on a closing "* * *", at the next chapter's start). */
   const readFrom = useCallback(
-    async (chapterId: number, offset = 0) => {
+    async (chapterId: number, offset = 0, announce = true) => {
       const list = live.current.chapters;
       const ch = list.find((c) => c.id === chapterId);
       if (!ch) return;
@@ -168,6 +202,11 @@ export function useBookPlayer({
         }
         start = queued;
       }
+      // Starting partway through a chapter with verses: its announcement ("John, chapter 3") first, once.
+      const opening = items.current[0];
+      if (announce && start > 0 && opening?.kind === "chapter" && items.current[start].chapterId === opening.chapterId && items.current[start].kind !== "chapter") {
+        items.current.splice(start, 0, { ...opening });
+      }
       const { catalog, resolved, prefs, bookTitle } = live.current;
       const first = items.current[start];
       const q = new SpeechQueue(
@@ -213,6 +252,7 @@ export function useBookPlayer({
             if (i >= items.current.length - APPEND_WHEN_LEFT) void appendNext();
           },
           onEnd: () => appendNext(),
+          pauseAfter: (i) => PAUSE_AFTER[items.current[i]?.kind ?? "text"] ?? 0,
         },
       );
       queue.current = q;
@@ -222,6 +262,20 @@ export function useBookPlayer({
     },
     [appendNext, save, sentencesOf],
   );
+
+  // Announcements turned on or off while a book with verses plays: carry on from the same verse with them.
+  const announce = `${prefs.announceVerses}:${prefs.announceChapter}`;
+  const announced = useRef(announce);
+  useEffect(() => {
+    if (announced.current === announce) return;
+    announced.current = announce;
+    const here = current;
+    const status = queue.current?.state.status;
+    if (!here?.kind || (status !== "playing" && status !== "loading")) return;
+    items.current = [];
+    void readFrom(here.chapterId, here.start, false); // the chapter has been announced already
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [announce]);
 
   // Settings changed (here, or in Settings) while reading.
   useEffect(() => {
@@ -279,7 +333,8 @@ export function useBookPlayer({
     readFrom,
     stop,
     toggle: () => queue.current?.toggle(),
-    sentence: (d: number) => seekBy((i) => i + d),
+    /** Previous/next sentence; in a book with verses, previous/next verse. */
+    sentence: (d: 1 | -1) => seekBy((i, list) => (list[i]?.kind ? verseStep(list, i, d) : i + d)),
     paragraph: (d: number) =>
       seekBy((i, list) => {
         const here = list[i];

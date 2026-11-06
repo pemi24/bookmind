@@ -71,6 +71,9 @@ class PreferencesUpdate(BaseModel):
     tts_pitch: float | None = Field(default=None, ge=0.5, le=2.0)  # browser voices only
     tts_volume: float | None = Field(default=None, ge=0.0, le=1.0)
     tts_auto_read: bool | None = None  # read each new chat reply aloud
+    # Books with verses, read aloud: say "Verse 1" before each verse, and "Genesis, chapter 1" once per chapter.
+    tts_announce_verses: Literal["every", "off"] | None = None
+    tts_announce_chapter: bool | None = None
 
 
 _VOICE_ID = re.compile(r"(?:%s):[^\x00-\x1f]*" % "|".join(TTS_PROVIDERS))
@@ -128,7 +131,7 @@ async def update_preferences(user: CurrentUser, req: PreferencesUpdate, db: Asyn
             if voice and not _VOICE_ID.fullmatch(voice):
                 raise HTTPException(422, "That isn't a voice BookMind knows.")
             prefs[key] = voice
-    for key in ("tts_speed", "tts_pitch", "tts_volume", "tts_auto_read"):
+    for key in ("tts_speed", "tts_pitch", "tts_volume", "tts_auto_read", "tts_announce_verses", "tts_announce_chapter"):
         if (value := getattr(req, key)) is not None:
             prefs[key] = value
     user.settings = prefs
