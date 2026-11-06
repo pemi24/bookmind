@@ -266,7 +266,7 @@ export const api = {
   reindex: (id: number) => request<{ ok: boolean }>(`/api/books/${id}/reindex`, { method: "POST" }),
   /** Turn chapter-and-verse detection on or off; the book is re-indexed. */
   setVerseMode: (id: number, detect: boolean) =>
-    request<{ ok: boolean }>(`/api/books/${id}/verse-mode`, { method: "PUT", body: JSON.stringify({ detect }) }),
+    request<{ ok: boolean }>(`/api/books/${id}/verse-mode`, json("PUT", { detect })),
   chapters: (id: number) => request<ChapterInfo[]>(`/api/books/${id}/chapters`),
   chapter: (id: number) => request<ChapterText>(`/api/chapters/${id}`),
   /** Find "John 3:16", "Gen 1:3" or "3:16" (in the book of `fromChapter`) in a book with verses. */
