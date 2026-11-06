@@ -123,9 +123,14 @@ def format_passages(passages: Sequence[Passage]) -> str:
         pages = ""
         if p.page_start:
             pages = f", p. {p.page_start}" + (f"-{p.page_end}" if p.page_end and p.page_end != p.page_start else "")
-        where = f"{p.book_title} — {p.chapter_title}" if multi_book else p.chapter_title
-        blocks.append(f"[{i}] ({where}{pages})\n{p.text}")
-    return "PASSAGES FROM THE BOOK:\n\n" + "\n\n".join(blocks)
+        label = getattr(p, "label", p.chapter_title)  # "Genesis 1:3–5" in a book with verses
+        where = f"{p.book_title} — {label}" if multi_book else label
+        blocks.append(f"[{i}] ({where}{pages})\n{getattr(p, 'numbered_text', None) or p.text}")
+    head = "PASSAGES FROM THE BOOK:\n\n"
+    if any(getattr(p, "numbered_text", None) for p in passages):
+        head = ("PASSAGES FROM THE BOOK (each verse starts with its chapter:verse number; when it helps, name the "
+                "verse in your answer, e.g. \"John 3:16\", as well as giving the passage number):\n\n")
+    return head + "\n\n".join(blocks)
 
 
 MEMORY_INSTRUCTION = ("Answer the question using the passages above together with the book memory (the "

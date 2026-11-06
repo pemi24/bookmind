@@ -5,10 +5,11 @@ import random
 import re
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Book, Chapter, Chunk
+from app.db.models import Book, Chapter, Chunk, Verse
+from app.ingestion.verses import verse_label
 from app.llm.providers import current_provider
 
 
@@ -171,3 +172,14 @@ def normalize_name(name: str) -> str:
     n = name.lower().translate(_QUOTES)
     n = re.sub(r"^(the|a|an)\s+", "", n.strip())
     return re.sub(r"[^\w\s']", "", n).strip()
+
+
+async def span_label(db: AsyncSession, chapter: Chapter, start: int, end: int) -> str:
+    """How a span of a chapter is cited: "John 3:16–17" in a book with verses, else the chapter title."""
+    if chapter.number is None:
+        return chapter.title
+    numbers = (await db.execute(
+        select(func.min(Verse.number), func.max(func.coalesce(Verse.end, Verse.number)))
+        .where(Verse.chapter_id == chapter.id, Verse.kind == "verse", Verse.char_start < end, Verse.char_end > start)
+    )).one()
+    return verse_label(chapter.title, numbers[0], numbers[1])

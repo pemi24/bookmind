@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.features.common import find_verbatim, max_input_chars
+from app.features.common import find_verbatim, max_input_chars, span_label
 from app.ingestion.chunking import page_at
 from app.db.models import Chapter
 from app.llm import client as llm
@@ -45,7 +45,8 @@ async def find_quotes(db: AsyncSession, book_id: int, book_title: str, topic: st
         out.append({
             "quote": ch.text[start:end],  # the book's exact text, not the model's copy
             "note": q.note, "chunk_id": p.chunk_id, "chapter_id": p.chapter_id,
-            "chapter_position": p.chapter_position, "chapter_title": p.chapter_title,
+            "chapter_position": p.chapter_position,
+            "chapter_title": await span_label(db, ch, start, end),  # "John 3:16" in a book with verses
             "page": page_at(ch.page_map, start), "char_start": start, "char_end": end,
             "book_title": book_title,
         })

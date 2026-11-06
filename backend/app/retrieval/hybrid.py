@@ -14,7 +14,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import Book, Chapter, Chunk
+from app.db.models import Book, Chapter, Chunk, Verse
+from app.ingestion.verses import verse_label
 from app.retrieval.embeddings import get_embedder
 from app.retrieval.rerank import get_reranker
 
@@ -35,9 +36,19 @@ class Passage:
     score: float = 0.0
     vector_rank: int | None = None
     keyword_rank: int | None = None
+    # Books with verses: the verses the passage covers, and its text with "3:16" before each verse
+    # (for the model, so it can name the exact verse; `text` stays the book's exact text).
+    verse_start: int | None = None
+    verse_end: int | None = None
+    numbered_text: str | None = None
+
+    @property
+    def label(self) -> str:
+        """How the passage is cited: "Genesis 1:3–5" in a book with verses, else the chapter title."""
+        return verse_label(self.chapter_title, self.verse_start, self.verse_end)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {**asdict(self), "label": self.label}
 
 
 def _keyword_tsquery(query: str) -> str | None:
@@ -111,8 +122,28 @@ async def _load_passages(db: AsyncSession, ids: list[int], user_id: int) -> dict
             chapter_id=chunk.chapter_id, chapter_position=chunk.chapter_position, chapter_title=ch_title,
             page_start=chunk.page_start, page_end=chunk.page_end,
             char_start=chunk.char_start, char_end=chunk.char_end, text=chunk.text,
+            verse_start=chunk.verse_start, verse_end=chunk.verse_end,
         )
+    await _number_verses(db, [p for p in out.values() if p.verse_start is not None])
     return out
+
+
+async def _number_verses(db: AsyncSession, passages: list[Passage]) -> None:
+    """Give passages from books with verses their text with each verse's reference ("3:16 For God...")."""
+    if not passages:
+        return
+    rows = (await db.execute(
+        select(Verse.chapter_id, Verse.chapter_number, Verse.number, Verse.end, Verse.kind, Verse.char_start, Verse.char_end)
+        .where(Verse.chapter_id.in_({p.chapter_id for p in passages})).order_by(Verse.chapter_id, Verse.position)
+    )).all()
+    for p in passages:
+        lines = []
+        for ch_id, ch_no, n, end, kind, start, stop in rows:
+            if ch_id != p.chapter_id or start < p.char_start or stop > p.char_end:
+                continue
+            text = p.text[start - p.char_start : stop - p.char_start]
+            lines.append(text if kind == "title" else f"{ch_no}:{n}{f'-{end}' if end else ''} {text}")
+        p.numbered_text = "\n".join(lines) or None
 
 
 async def search_book(

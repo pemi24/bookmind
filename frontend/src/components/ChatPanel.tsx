@@ -147,7 +147,7 @@ function SourceList({ sources, cited, answer, onCite }: { sources: Source[]; cit
           <span className="font-semibold text-brand-600 dark:text-brand-300">[{s.marker}]</span>
           <span className="truncate">
             {multiBook ? `${s.book_title} · ` : ""}
-            {s.chapter_title}
+            {s.label ?? s.chapter_title}
             {s.page_start ? ` · p. ${s.page_start}` : ""}
           </span>
         </button>
@@ -399,7 +399,7 @@ export default function ChatPanel({ onCite }: { onCite: (s: Source) => void }) {
       message_id: m.id ?? null,
       chunk_id: first?.chunk_id ?? null,
       tags: [],
-      location: first ? { chapter_id: first.chapter_id, chapter_title: first.chapter_title, page: first.page_start, char_start: first.char_start, char_end: first.char_end } : {},
+      location: first ? { chapter_id: first.chapter_id, chapter_title: first.label ?? first.chapter_title, page: first.page_start, char_start: first.char_start, char_end: first.char_end } : {},
     });
   };
 

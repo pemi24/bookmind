@@ -63,6 +63,7 @@ def source_dict(marker: int, p: Passage) -> dict:
         "chapter_id": p.chapter_id, "chapter_position": p.chapter_position, "chapter_title": p.chapter_title,
         "page_start": p.page_start, "page_end": p.page_end, "char_start": p.char_start, "char_end": p.char_end,
         "score": round(p.score, 4), "text": p.text,
+        "verse_start": p.verse_start, "verse_end": p.verse_end, "label": p.label,  # "Genesis 1:3–5"
     }
 
 

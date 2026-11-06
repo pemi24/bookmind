@@ -13,6 +13,7 @@ export interface ReaderTarget {
   chapterId?: number;
   highlight?: { start: number; end: number };
   ref?: string; // books with verses: a reference to look up ("John 3:16"), from a link
+  verses?: { start: number; end: number | null }; // books with verses: the verses cited (shown in the verse bar)
   nonce: number; // forces re-scroll when the same passage is clicked again
 }
 
@@ -245,7 +246,12 @@ export default function ReaderPanel({
   const [langPicker, setLangPicker] = useState(false);
   const [translation, setTranslation] = useState<TranslationState | null>(null);
   // Books with verses: the verse chosen in the navigator ("first"/"last" until its chapter loads).
-  const [verseSel, setVerseSel] = useState<{ chapterId: number; number: number | "first" | "last"; span?: { start: number; end: number } } | null>(null);
+  const [verseSel, setVerseSel] = useState<{
+    chapterId: number;
+    number: number | "first" | "last";
+    last?: number | null; // a range of verses ("John 3:16–21", a cited passage)
+    span?: { start: number; end: number };
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { book, user, onUser } = useWorkspace();
   const [follow, setFollow] = useState(() => loadPref("reader:tts-follow", true));
@@ -327,7 +333,8 @@ export default function ReaderPanel({
     resumeRef.current = null;
     setHits(null);
     if (target.chapterId) {
-      setVerseSel(null);
+      // a cited passage in a book with verses: its verses are chosen, so the verse bar shows "John 3:16–21"
+      setVerseSel(target.verses ? { chapterId: target.chapterId, number: target.verses.start, last: target.verses.end, span: target.highlight } : null);
       setChapterId(target.chapterId);
       setScrollNonce((n) => n + 1);
     }
@@ -337,7 +344,11 @@ export default function ReaderPanel({
         .lookupVerse(bookId, target.ref)
         .then((hit) => {
           setChapterId(hit.chapter_id);
-          setVerseSel(hit.verse !== null && hit.start !== null && hit.end !== null ? { chapterId: hit.chapter_id, number: hit.verse, span: { start: hit.start, end: hit.end } } : null);
+          setVerseSel(
+            hit.verse !== null && hit.start !== null && hit.end !== null
+              ? { chapterId: hit.chapter_id, number: hit.verse, last: hit.verse_end, span: { start: hit.start, end: hit.end } }
+              : null,
+          );
           setScrollNonce((n) => n + 1);
         })
         .catch((e) => notify?.((e as Error).message));
@@ -399,7 +410,17 @@ export default function ReaderPanel({
     const v = n === "first" ? verseList[0] : n === "last" ? verseList[verseList.length - 1] : verseList.find((x) => x.number <= n && n <= (x.end ?? x.number));
     if (!v) return null;
     const span = typeof n === "number" ? verseSel.span : undefined;
-    return { verse: v, index: verseList.indexOf(v), start: span?.start ?? v.start, end: span?.end ?? v.stop };
+    // a range: "next verse" goes on after its last verse
+    const lastNo = typeof n === "number" && verseSel.last && verseSel.last > n ? verseSel.last : null;
+    const lastVerse = lastNo ? (verseList.find((x) => x.number <= lastNo && lastNo <= (x.end ?? x.number)) ?? v) : v;
+    return {
+      verse: v,
+      index: verseList.indexOf(v),
+      endIndex: verseList.indexOf(lastVerse),
+      label: `${v.number}${lastNo ? `–${lastNo}` : v.end ? `–${v.end}` : ""}`,
+      start: span?.start ?? v.start,
+      end: span?.end ?? v.stop,
+    };
   }, [chapter, verseSel, verseList]);
 
   const ranges = useMemo<Range[]>(() => {
@@ -733,12 +754,12 @@ export default function ReaderPanel({
   };
   const stepVerse = (d: 1 | -1) => {
     if (!selectedVerse || !chapter) return;
-    const to = verseList[selectedVerse.index + d];
+    const to = verseList[(d > 0 ? selectedVerse.endIndex : selectedVerse.index) + d];
     if (to) return goVerse(chapter.id, to.number);
     const other = d > 0 ? next : prev;
     if (other?.number != null) goVerse(other.id, d > 0 ? "first" : "last");
   };
-  const verseLabel = selectedVerse && chapter ? `${chapter.title}:${selectedVerse.verse.number}${selectedVerse.verse.end ? `–${selectedVerse.verse.end}` : ""}` : null;
+  const verseLabel = selectedVerse && chapter ? `${chapter.title}:${selectedVerse.label}` : null;
   const copyVerseLink = async () => {
     if (!verseLabel) return;
     const url = `${window.location.origin}${window.location.pathname}#/book/${bookId}/read?ref=${encodeURIComponent(verseLabel.replace("–", "-"))}`;
@@ -854,7 +875,7 @@ export default function ReaderPanel({
           </span>
           <button
             onClick={() => stepVerse(1)}
-            disabled={selectedVerse.index === verseList.length - 1 && next?.number == null}
+            disabled={selectedVerse.endIndex === verseList.length - 1 && next?.number == null}
             className={iconBtn}
             title="Next verse"
             aria-label="Next verse"

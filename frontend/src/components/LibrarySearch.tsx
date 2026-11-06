@@ -211,7 +211,7 @@ export default function LibrarySearch({ books, onOpenPassage }: { books: Book[];
                     >
                       <span className="font-semibold text-brand-600 dark:text-brand-300">[{s.marker}]</span>
                       <span className="truncate">
-                        {s.book_title} · {s.chapter_title}
+                        {s.book_title} · {s.label ?? s.chapter_title}
                         {s.page_start ? ` · p. ${s.page_start}` : ""}
                       </span>
                     </button>
@@ -239,7 +239,7 @@ export default function LibrarySearch({ books, onOpenPassage }: { books: Book[];
                       className="w-full rounded-lg border border-stone-200 bg-white p-3 text-left transition hover:border-brand-400 dark:border-stone-800 dark:bg-stone-900"
                     >
                       <p className="text-xs font-medium text-stone-500">
-                        {s.chapter_title}
+                        {s.label ?? s.chapter_title}
                         {s.page_start ? ` · p. ${s.page_start}` : ""}
                       </p>
                       <p className="mt-1 font-serif text-[15px] leading-relaxed text-stone-700 dark:text-stone-300">

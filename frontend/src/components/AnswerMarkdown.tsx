@@ -41,7 +41,7 @@ export default function AnswerMarkdown({
             if (m) {
               const src = sources[Number(m[1]) - 1];
               if (!src) return <span>[{children}]</span>;
-              const loc = [src.chapter_title, src.page_start ? `p. ${src.page_start}` : null].filter(Boolean).join(" · ");
+              const loc = [src.label ?? src.chapter_title, src.page_start ? `p. ${src.page_start}` : null].filter(Boolean).join(" · ");
               return (
                 <button
                   type="button"

@@ -105,6 +105,10 @@ export interface Source {
   char_end: number;
   score: number;
   text: string;
+  /** Books with verses: the verses the passage covers, and how it's cited ("Genesis 1:3–5"). */
+  verse_start?: number | null;
+  verse_end?: number | null;
+  label?: string;
 }
 
 /** Where a streamed answer is: searching, a second search with other wordings, or writing. */
@@ -175,6 +179,8 @@ export interface PassageLoc {
   chapter_id: number;
   char_start?: number;
   char_end?: number;
+  verse_start?: number | null; // books with verses: open with these verses chosen
+  verse_end?: number | null;
 }
 
 export interface Job {

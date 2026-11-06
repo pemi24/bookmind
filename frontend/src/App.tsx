@@ -319,6 +319,7 @@ export default function App({ user, onUser, onSignOut }: { user: User; onUser: (
       const target: ReaderTarget = {
         chapterId: loc.chapter_id,
         highlight: loc.char_start !== undefined && loc.char_end !== undefined ? { start: loc.char_start, end: loc.char_end } : undefined,
+        verses: loc.verse_start != null ? { start: loc.verse_start, end: loc.verse_end ?? null } : undefined,
         nonce: Date.now(),
       };
       if (loc.book_id && loc.book_id !== bookId) {

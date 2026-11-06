@@ -8,7 +8,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Book, Chapter
-from app.features.common import find_verbatim, max_input_chars
+from app.features.common import find_verbatim, max_input_chars, span_label
 from app.ingestion.chunking import page_at
 from app.llm import client as llm
 from app.llm.prompts import essay as P
@@ -43,7 +43,8 @@ async def outline(db: AsyncSession, book: Book, thesis: str, max_chapter: int | 
             ch = chapters[p.chapter_id]
             evidence.append({
                 "quote": ch.text[start:end], "explanation": ev.explanation, "chunk_id": p.chunk_id,
-                "chapter_id": p.chapter_id, "chapter_position": p.chapter_position, "chapter_title": p.chapter_title,
+                "chapter_id": p.chapter_id, "chapter_position": p.chapter_position,
+                "chapter_title": await span_label(db, ch, start, end),  # "John 3:16" in a book with verses
                 "page": page_at(ch.page_map, start), "char_start": start, "char_end": end,
             })
         if s.heading or s.point:
