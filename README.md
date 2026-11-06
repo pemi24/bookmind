@@ -66,6 +66,11 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   chapter, set a sleep timer, and **Continue listening** where you stopped. Works from the lock
   screen and headphone buttons. Pick separate voices for chat and books in **Settings → Listening**
   (see §4).
+* **Scriptures: chapter and verse** — the Bible, the Quran and other books numbered by chapter and
+  verse are recognised when indexed ("Detected 66 books, 1,189 chapters, 31,102 verses"). Go
+  straight to a verse ("John 3:16", "Gen 1:3", "3:16") or pick book → chapter → verse; share a
+  link to a verse; citations read "John 3:15–21" and open on those verses; read aloud as
+  "Genesis, chapter 1 … Verse 1 …", never "one colon one" (see §6).
 * Suggested starter questions, dark/light mode, responsive layout, voice input (browser speech
   recognition).
 
@@ -438,6 +443,59 @@ loop that psycopg's async driver requires.
 * `alice-in-wonderland.txt` / `.epub` — Lewis Carroll (fiction, 12 chapters)
 * `the-art-of-war.txt` — Sun Tzu, tr. Lionel Giles (non-fiction; useful for cross-book comparison)
 
+`backend/tests/data/kjv_sample*.txt` hold a few chapters of the King James Version (public domain)
+in the two common verse layouts; they're used by the tests, and you can upload one to try the
+scripture features. For a whole Bible, Project Gutenberg's King James Version (eBook #10) works
+well; **Find free books** can add it.
+
+### Scriptures and other books with verses
+
+**How verses are found.** When a book is indexed, BookMind looks inside each of its parts (for a
+Bible, usually its books: Genesis, Exodus…) for verses in either of the layouts real files use:
+
+* **reference markers** before each verse: `1:1 In the beginning… 1:2 And the earth…` (also `1.1`,
+  and ranges such as `3:3-5`);
+* **chapter headings and bare numbers**: a short `Genesis 1`, `Chapter 1` or `Psalm 23` line, then
+  verse 1 (often unnumbered), then `2And the earth…`, `[3] And God said…` or `(4) And God saw…`.
+
+A number only counts as a verse when it continues the sequence (the next verse, or a few further on,
+since some translations leave verses out), so ordinary numbers and cross references stay part of the
+text. A heading repeated inside a chapter is a page header and is dropped. When chapter numbers
+start again at 1, or a heading names another book, a new book begins, so Matthew 1 is never mixed up
+with Genesis 1. Text between a chapter's heading and verse 1 is its title (a psalm's
+superscription). Book names and their abbreviations (Gen, 1 Cor, Ps, Song of Songs…) come from a
+built-in list of the Bible's books, Apocrypha included; other books keep the names their headings
+give them.
+
+The structure is used only when it's reliable: at least 50 verses, covering at least 60% of the
+book's text. Parts without verses (a preface, a licence) stay ordinary chapters. The result is
+shown on the book ("66 books · 1,189 chapters · 31,102 verses") and in its indexing message. Such a
+book is stored as one chapter per scripture chapter ("Genesis 1"), a row per verse with clean text
+(no reference markers), and passages of a few whole verses for chat, each knowing its verse range.
+The book memory isn't built automatically for these books (a Bible has over a thousand chapters,
+one AI request each); **Build book memory** still does it on request.
+
+**Books you uploaded before.** Books indexed before verse detection existed are left as they were.
+To detect verses in one, open the **⋮** menu on its card in the library and choose **Detect verses**
+(it re-indexes the book). **Turn off verses** in the same menu re-indexes it as an ordinary book.
+Re-indexing a book that changes between the two starts its reading and listening positions again
+from the beginning, since its chapters are numbered differently.
+
+**Going to a verse.** In the reader, the chapter name at the top opens the navigator: type a
+reference (`John 3:16`, `Gen 1:3`, `1 Cor 13:4-7`, `Ps 23`, `First John 4:8`, or `3:16` for the book
+on screen) or pick a book, a chapter and a verse from the grids (arrow keys move around them). The
+chosen verse is highlighted, with previous/next verse, **Read from here** and **Copy link**. Links
+look like `#/book/12/read?ref=John%203:16` (or `?book=John&chapter=3&verse=16`); they only open for
+the book's owner.
+
+**Listening.** Chapters with verses are read from their structure, never from the raw text:
+"Genesis, chapter 1" once when a chapter starts (also when you start partway through), a psalm's
+title, then "Verse 1" and the verse ("Verses 3 to 5" for a range; a verse the translation leaves out
+is skipped silently). The verse being read is highlighted, previous/next move by verse, and
+**Continue listening** returns to the verse. **Settings → Listening** (or the listen bar's settings)
+has **Announce verse numbers** (every verse / off) and **Announce each chapter**, both on by
+default.
+
 ---
 
 ## 7. Tests and evaluation
@@ -461,7 +519,13 @@ search never returns another account's passages). Listening is covered by text c
 (markdown, citation markers, URLs, emoji), sentence splitting (abbreviations, initials, quotes, very
 long chapters), provider selection and fallback, the cloud voices' requests (mocked), the audio
 cache (hits, per-account entries, size and age limits), voice preferences, and 404s for other
-accounts' chapters and listening positions. A real Piper voice is tested with
+accounts' chapters and listening positions. Books with verses are covered by `tests/test_verses.py`
+(detection on the KJV samples in both layouts: books whose chapter numbers repeat, verse ranges,
+left-out verses, psalm titles, page headers, ordinary books not mistaken for scripture; references
+such as "John 3:16", "Gen 1:3" and "3:16"; and the text read aloud, which never contains a "1:4"-style
+marker and announces each chapter once) and `tests/test_verses_api.py` (indexing, verse lookup,
+read-aloud items, verse-labelled citations, turning detection off, and 404s for another account's
+book). A real Piper voice is tested with
 `BOOKMIND_TEST_PIPER=1 pytest tests/test_tts.py` (it loads a voice). `stress_large_book.py` runs against
 the running backend (start it first); the test book is deleted afterwards.
 
@@ -474,9 +538,11 @@ npm test                                 # Vitest unit tests (jsdom)
 npm run build                            # type-check and production build
 ```
 The unit tests cover the pure logic: text helpers (loose quote matching for highlights, the spoiler
-guard limit, preferences, theme), voice resolution and its fallback notices, and the read-aloud
+guard limit, preferences, theme), voice resolution and its fallback notices, the read-aloud
 queue (sentence order, pause/resume/seek, clips synthesized ahead and freed after playing, and
-carrying on with the browser's voice when no server voice can speak).
+carrying on with the browser's voice when no server voice can speak), and listening to books with
+verses (announcements left out by the settings, the chapter announced once when starting
+partway through, previous/next by verse).
 
 ---
 

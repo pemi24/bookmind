@@ -22,6 +22,15 @@ export function withAnnouncements<T extends { kind?: ChapterSentence["kind"] }>(
   return items.filter((s) => (s.kind !== "verse-number" || opts.verses) && (s.kind !== "chapter" || opts.chapter));
 }
 
+/** Starting partway through a chapter with verses: its announcement ("John, chapter 3") is read
+ * first, once, by putting a copy of it just before `start`. Other items are returned unchanged. */
+export function withOpening<T extends { kind?: ChapterSentence["kind"]; chapterId: number }>(items: T[], start: number): T[] {
+  const opening = items[0];
+  const at = items[start];
+  if (start <= 0 || !at || opening?.kind !== "chapter" || at.chapterId !== opening.chapterId || at.kind === "chapter") return items;
+  return [...items.slice(0, start), { ...opening }, ...items.slice(start)];
+}
+
 /** The item a verse step lands on: the start of the next (d = 1) or previous (d = -1) verse. Items of
  * one verse share its start; a chapter's announcement goes with its first verse. */
 export function verseStep(list: { chapterId: number; start: number }[], i: number, d: 1 | -1): number {
@@ -202,11 +211,7 @@ export function useBookPlayer({
         }
         start = queued;
       }
-      // Starting partway through a chapter with verses: its announcement ("John, chapter 3") first, once.
-      const opening = items.current[0];
-      if (announce && start > 0 && opening?.kind === "chapter" && items.current[start].chapterId === opening.chapterId && items.current[start].kind !== "chapter") {
-        items.current.splice(start, 0, { ...opening });
-      }
+      if (announce) items.current = withOpening(items.current, start);
       const { catalog, resolved, prefs, bookTitle } = live.current;
       const first = items.current[start];
       const q = new SpeechQueue(

@@ -62,6 +62,7 @@ def without_markers(text: str) -> str:
     nothing that looks like one may ever reach the voice)."""
     t = _LEADING_NUMBER.sub("", text)
     t = _MARKER.sub("", t)
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)  # "written in 3:3-5, so" -> "written in, so"
     return re.sub(r"\s{2,}", " ", t).strip()
 
 
